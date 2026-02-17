@@ -7,7 +7,7 @@ if (!require("pacman")) install.packages("pacman")
 library(pacman)
 
 # Cargamos librerías de Práctica 1 y 2
-p_load(tidyverse, VIM, moments, plotly, editrules, fastDummies, ggthemes, corrplot, scales, nortest, car)
+p_load(tidyverse, VIM, moments, plotly, fastDummies, corrplot, scales)
 
 # Ajustamos el directorio de trabajo
 setwd("C:/Users/noefu/OneDrive/0. Inbox/2. ADAT/Mis prácticas en R/Titanic")
@@ -286,3 +286,4 @@ p_inter <- ggplot(df_analysis, aes(x = pclass, y = age, color = survived)) +
 
 # Generar el gráfico interactivo
 ggplotly(p_inter, tooltip = "text")
+
