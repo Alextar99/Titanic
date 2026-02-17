@@ -162,6 +162,10 @@ summary(titanic)
 # =====================================================
 # PASO 7: EDA COMPLETO (con outliers preservados)
 # =====================================================
+
+ggplot(titanic, aes(sex, fill=survived)) + geom_bar(stat="count") + 
+  labs(y="Nº de personas") + theme_minimal()
+
 ggplot(titanic, aes(x = pclass, y = fare)) +
   geom_boxplot(fill = "steelblue") +
   facet_wrap(~sex) +  # Dos paneles: hombres/mujeres
@@ -204,4 +208,5 @@ corrplot(cor(titanic_full), method="color", type="upper", order="hclust",
 cat("\n🎉 ANÁLISIS COMPLETO - OUTLIERS PRESERVADOS\n")
 cat("Justificación: Outliers Titanic = información histórica real valiosa\n")
 cat("Dataset final:", nrow(titanic), "filas | 100% completas | 0 info perdida\n")
+
 
