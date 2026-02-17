@@ -119,16 +119,10 @@ cat("NAs restantes:", sum(is.na(df_analysis)), "\n")
 # B) ANÁLISIS EXPLORATORIO DE DATOS (EDA) - VERSIÓN FINAL
 # ==============================================================================
 
-# Carga extra para la matriz de correlación (muy visual)
-if (!require("corrplot")) install.packages("corrplot")
-library(corrplot)
-library(scales) 
-
 
 # ------------------------------------------------------------------------------
 # 1. ANÁLISIS UNIVARIANTE
 # ------------------------------------------------------------------------------
-
 
 
 # --- Variable Numérica: EDAD (Histograma + Densidad) ---
@@ -286,4 +280,3 @@ p_inter <- ggplot(df_analysis, aes(x = pclass, y = age, color = survived)) +
 
 # Generar el gráfico interactivo
 ggplotly(p_inter, tooltip = "text")
-
