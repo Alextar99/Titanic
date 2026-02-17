@@ -196,8 +196,22 @@ ggplot(titanic, aes(pclass, fill=survived)) + geom_bar(position="fill") +
 ggplot(titanic, aes(sex, age, fill=survived)) + geom_boxplot() + 
   ggtitle("Edad por sexo (ancianos preservados)") + theme_minimal()
 
-ggplot(titanic, aes(parch, sibsp, col=survived)) + geom_jitter(alpha=0.6) + 
-  ggtitle("Familias (outliers = familias grandes reales)")
+ggplot(titanic, aes(x = parch, y = sibsp, color = survived)) + 
+  geom_jitter(alpha = 0.6, size = 2) +
+  labs(
+    title = "Tamaño Familiar vs Supervivencia",
+    subtitle = "sibsp = hermanos/cónyuge | parch = padres/hijos | Outliers = familias numerosas reales",
+    x = "Parch (padres/hijos a bordo)",
+    y = "Sibsp (hermanos/cónyuge a bordo)",
+    color = "Sobrevivió"
+  ) +
+  # Añadir líneas referencia
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3) +
+  # Anotar caso interesante
+  annotate("text", x = 6, y = 8, label = "Familia Sage\n(11 miembros)", 
+           size = 3, color = "red", fontface = "bold") +
+  theme_minimal()
 
 ggplot(transform(titanic, family_size=sibsp+parch+1), aes(family_size, fill=survived)) +
   geom_bar(position="dodge") + ggtitle("Family Size vs Survived") + theme_minimal()
@@ -223,6 +237,7 @@ corrplot(cor(titanic_full), method="color", type="upper", order="hclust",
 cat("\n🎉 ANÁLISIS COMPLETO - OUTLIERS PRESERVADOS\n")
 cat("Justificación: Outliers Titanic = información histórica real valiosa\n")
 cat("Dataset final:", nrow(titanic), "filas | 100% completas | 0 info perdida\n")
+
 
 
 
