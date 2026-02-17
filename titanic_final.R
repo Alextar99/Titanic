@@ -259,12 +259,30 @@ corrplot(M, method = "color", type = "upper", order = "hclust",
 # 4. GRÁFICO INTERACTIVO
 # ------------------------------------------------------------------------------
 
-p_inter <- ggplot(df_analysis, aes(x = age, y = fare_log, color = survived, 
-                                   text = paste("Clase:", pclass, 
-                                                "<br>Sexo:", sex,
-                                                "<br>Familia:", family_size))) +
-  geom_point(alpha = 0.6) +
-  theme_minimal() +
-  labs(title = "Exploración Interactiva: Edad vs Tarifa", x = "Edad", y = "Log(Tarifa)")
 
-ggplotly(p_inter, tooltip = c("text"))
+# Definimos el gráfico
+p_inter <- ggplot(df_analysis, aes(x = pclass, y = age, color = survived)) +
+  
+  # 1. Caja de fondo (Transparente) para referencia estadística
+  geom_boxplot(width = 0.4, fill = "white", alpha = 0, outlier.shape = NA) +
+  
+  # 2. Puntos con Jitter
+  geom_jitter(aes(text = paste("<b>Pasajero</b>",
+                               "<br>Edad:", age,
+                               "<br>Sexo:", sex,
+                               "<br>Clase:", pclass,
+                               "<br>Tarifa: $", round(fare, 2),
+                               "<br>Familia:", family_size)),
+              width = 0.2, 
+              alpha = 0.6, 
+              size = 2) +
+  
+  # Estética
+  scale_color_manual(values = c("firebrick", "forestgreen"), name = "Sobrevivió") +
+  labs(title = "Distribución Interactiva: Edad por Clase", 
+       subtitle = "Pasa el ratón para ver detalles. (Verde = Sobrevivió)",
+       x = "Clase", y = "Edad") +
+  theme_minimal()
+
+# Generar el gráfico interactivo
+ggplotly(p_inter, tooltip = "text")
