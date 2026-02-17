@@ -81,8 +81,8 @@ ggplot(titanic_tratado, aes(pclass, fare)) +
   geom_boxplot(outlier.color="red") + 
   scale_y_log10() + ggtitle("Fare por pclass (log scale)") + theme_minimal()
 
-ggplot(titanic_tratado, aes(embarked, fare)) + 
-  geom_boxplot() + scale_y_log10() + theme_minimal()
+ggplot(titanic_tratado, aes(embarked, fare)) + labs(title = "Precio billetes según puerta de embarque") +
+  geom_boxplot(fill="red") + scale_y_log10() + theme_minimal()
 
 medianas <- titanic_tratado %>% group_by(pclass) %>% 
   summarise(mediana_fare = median(fare, na.rm = TRUE), .groups = "drop")
@@ -162,9 +162,12 @@ summary(titanic)
 # =====================================================
 # PASO 7: EDA COMPLETO (con outliers preservados)
 # =====================================================
-ggplot(titanic, aes(pclass, fare)) + geom_boxplot(fill="steelblue") + 
-  facet_wrap(~sex) + scale_y_log10() +
-  ggtitle("Fare por clase/sexo (log, outliers visibles)") + theme_minimal()
+ggplot(titanic, aes(x = pclass, y = fare)) +
+  geom_boxplot(fill = "steelblue") +
+  facet_wrap(~sex) +  # Dos paneles: hombres/mujeres
+  labs(title = "Fare por clase y sexo") +
+  geom_hline(aes(yintercept=80), col = "red") + 
+  theme_minimal()
 
 porcentaje <- c("0%", "25%", "50%", "75%", "100%")
 ggplot(titanic, aes(pclass, fill=survived)) + geom_bar(position="fill") +
@@ -201,3 +204,4 @@ corrplot(cor(titanic_full), method="color", type="upper", order="hclust",
 cat("\n🎉 ANÁLISIS COMPLETO - OUTLIERS PRESERVADOS\n")
 cat("Justificación: Outliers Titanic = información histórica real valiosa\n")
 cat("Dataset final:", nrow(titanic), "filas | 100% completas | 0 info perdida\n")
+
