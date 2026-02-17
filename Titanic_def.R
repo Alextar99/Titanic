@@ -221,6 +221,20 @@ ggplot(titanic, aes(fare, fill=survived)) +
   geom_density(alpha=0.6) + scale_x_log10() +
   ggtitle("OUTLIERS RICOS SOBREVIVEN MÁS (preservados ✓)") + theme_minimal()
 
+
+ggplot(titanic, aes(x=age)) +
+  geom_histogram(aes(y=..density..),      
+                 binwidth=.5,
+                 colour="gray", 
+                 fill="light gray",
+                 linetype="dashed") +
+  geom_density(aes(x=age, color=pclass), alpha=.5, fill="white", adjust = .6, size=1) +
+  scale_color_manual(values = c("black", "red", "blue"), 
+                     name = "Class") + 
+  ggtitle("Density of Age by Ticket Class")+ 
+  theme_classic()
+
+
 # =====================================================
 # PASO 8: CORRELACIONES
 # =====================================================
@@ -237,6 +251,7 @@ corrplot(cor(titanic_full), method="color", type="upper", order="hclust",
 cat("\n🎉 ANÁLISIS COMPLETO - OUTLIERS PRESERVADOS\n")
 cat("Justificación: Outliers Titanic = información histórica real valiosa\n")
 cat("Dataset final:", nrow(titanic), "filas | 100% completas | 0 info perdida\n")
+
 
 
 
