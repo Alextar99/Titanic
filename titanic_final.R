@@ -7,7 +7,7 @@ if (!require("pacman")) install.packages("pacman")
 library(pacman)
 
 # Cargamos librerías de Práctica 1 y 2
-p_load(tidyverse, VIM, moments, plotly, editrules, fastDummies, nortest, car)
+p_load(tidyverse, VIM, moments, plotly, editrules, fastDummies, ggthemes, corrplot, scales, nortest, car)
 
 # Ajustamos el directorio de trabajo
 setwd("C:/Users/noefu/OneDrive/0. Inbox/2. ADAT/Mis prácticas en R/Titanic")
@@ -72,6 +72,8 @@ df_imputed <- kNN(df, variable = c("age"), k = 5)
 df_clean <- df_imputed[, 1:ncol(df)]
 
 
+# Feature engineering: family size
+df_clean$family_size <- df_clean$sibsp + df_clean$parch + 1
 
 
 
@@ -89,6 +91,7 @@ df_clean$fare_log <- log(df_clean$fare + 1)  # +1 para evitar log(0)
 cat("Fare Original:", skewness(df_clean$fare), "\n")
 cat("Fare Log:", skewness(df_clean$fare_log), " (Más cercano a 0 es mejor)\n")
 
+boxplot(df_clean$fare_log, main = "Outliers en Fare (Después)")
 
 
 
@@ -113,123 +116,155 @@ cat("NAs restantes:", sum(is.na(df_analysis)), "\n")
 
 
 # ==============================================================================
-# B) ANÁLISIS EXPLORATORIO DE DATOS (EDA)
+# B) ANÁLISIS EXPLORATORIO DE DATOS (EDA) - VERSIÓN FINAL
 # ==============================================================================
 
+# Carga extra para la matriz de correlación (muy visual)
+if (!require("corrplot")) install.packages("corrplot")
+library(corrplot)
+library(scales) 
+
+
 # ------------------------------------------------------------------------------
-# 1. ANÁLISIS UNIVARIANTE (Distribuciones Individuales)
+# 1. ANÁLISIS UNIVARIANTE
 # ------------------------------------------------------------------------------
 
-# --- Variable Numérica: EDAD ---
-# [cite_start]Histograma con Curva de Densidad [cite: 633, 646]
+
+
+# --- Variable Numérica: EDAD (Histograma + Densidad) ---
+
 p1 <- ggplot(df_analysis, aes(x = age)) +
   geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", color = "white") +
-  geom_density(alpha = 0.4, fill = "red") +
+  geom_density(alpha = 0.2, fill = "red") +
   theme_minimal() +
   labs(title = "Distribución de la Edad", 
-       subtitle = "La imputación k-NN ha preservado la forma natural",
+       subtitle = "La imputación k-NN preserva la distribución original",
        x = "Edad (Años)", y = "Densidad")
 print(p1)
 
-# --- Variable Numérica: TARIFA (Efecto de la Transformación) ---
-# Comparativa: Original vs Log
+
+
+# --- Variable Numérica: TARIFA (Validación de Transformación) ---
+
 p2 <- ggplot(df_analysis, aes(x = fare_log)) +
   geom_histogram(bins = 30, fill = "purple", color = "white", alpha = 0.7) +
   theme_minimal() +
-  labs(title = "Distribución de la Tarifa (Transformación Log)", 
-       subtitle = "Se ha corregido la asimetría extrema de los precios altos",
+  labs(title = "Distribución de la Tarifa (Log)", 
+       subtitle = "La transformación logarítmica ha corregido el sesgo positivo",
        x = "Log(Tarifa)", y = "Frecuencia")
 print(p2)
 
+
+
 # --- Variable Categórica: SUPERVIVENCIA ---
-# Barplot simple con etiquetas
+
 p3 <- ggplot(df_analysis, aes(x = survived, fill = survived)) +
   geom_bar() +
   scale_fill_manual(values = c("firebrick", "forestgreen")) +
   geom_text(stat='count', aes(label=..count..), vjust=-0.5) +
   theme_minimal() +
-  labs(title = "Conteo Total de Supervivientes", x = "¿Sobrevivió?", y = "Pasajeros")
+  labs(title = "Tasas de Supervivencia", x = "¿Sobrevivió?", y = "Pasajeros")
 print(p3)
 
 
+
+
+
+
 # ------------------------------------------------------------------------------
-# 2. ANÁLISIS BIVARIANTE (Relaciones clave)
+# 2. ANÁLISIS BIVARIANTE (Relaciones Clave)
 # ------------------------------------------------------------------------------
 
-# --- CLASE vs SUPERVIVENCIA (Barras Apiladas) ---
-# [cite_start]Usamos position="fill" para ver porcentajes [cite: 108]
+
+# --- CLASE vs SUPERVIVENCIA ---
+
+# A mejor clase, mayor probabilidad de sobrevivir
 p4 <- ggplot(df_analysis, aes(x = pclass, fill = survived)) +
   geom_bar(position = "fill") +
   scale_y_continuous(labels = scales::percent) +
-  labs(title = "Tasa de Supervivencia por Clase", 
-       subtitle = "Clara correlación: A mejor clase, mayor supervivencia",
-       x = "Clase", y = "Porcentaje") +
+  scale_fill_brewer(palette = "Set1") +
   theme_minimal() +
-  scale_fill_brewer(palette = "Set1")
+  labs(title = "Probabilidad de Supervivencia por Clase",
+       x = "Clase", y = "Porcentaje")
 print(p4)
 
-# --- EDAD vs SUPERVIVENCIA (Boxplot + Jitter) ---
-# [cite_start]Boxplot para ver medianas, Jitter para ver la densidad de puntos [cite: 615]
+
+
+# --- EDAD vs SUPERVIVENCIA (Violin Plot + Boxplot) ---
+
 p5 <- ggplot(df_analysis, aes(x = survived, y = age, fill = survived)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.6) + # Ocultamos outliers del boxplot
-  geom_jitter(width = 0.2, alpha = 0.1) +         # Los mostramos con jitter
+  geom_violin(trim = FALSE, alpha = 0.5) +          # Muestra la densidad (forma)
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) + # Muestra la mediana
+  theme_minimal() +
   labs(title = "Distribución de Edad según Supervivencia", 
-       subtitle = "Los niños (puntos bajos) tienen mayor presencia en 'Sí'",
-       x = "¿Sobrevivió?", y = "Edad") +
-  theme_minimal()
+       subtitle = "La forma de 'violín' en Sí muestra mayor densidad de niños",
+       x = "¿Sobrevivió?", y = "Edad")
 print(p5)
 
+
+
 # --- TAMAÑO FAMILIA vs SUPERVIVENCIA ---
-# Feature Engineering visual (Idea de tu amigo, muy valiosa)
+
 p6 <- ggplot(df_analysis, aes(x = as.factor(family_size), fill = survived)) +
   geom_bar(position = "fill") +
   scale_y_continuous(labels = scales::percent) +
+  theme_minimal() +
   labs(title = "Supervivencia según Tamaño Familiar", 
-       x = "Miembros de la Familia (SibSp + Parch + 1)", y = "Porcentaje") +
-  theme_minimal()
+       subtitle = "Las familias pequeñas (2-4) tuvieron mayor tasa de supervivencia",
+       x = "Miembros de la Familia", y = "Porcentaje")
 print(p6)
 
 
+
+
 # ------------------------------------------------------------------------------
-# 3. ANÁLISIS MULTIVARIANTE (Paneles / Facets)
+# 3. ANÁLISIS MULTIVARIANTE
 # ------------------------------------------------------------------------------
 
-# --- EL GRÁFICO DEFINITIVO: Clase + Sexo + Supervivencia ---
-# [cite_start]Facet Wrap para separar por Sexo [cite: 300]
-# Demuestra el protocolo "Mujeres y niños primero" dentro de cada clase
+
+#  Patrón 'Mujeres y niños primero'
 p7 <- ggplot(df_analysis, aes(x = pclass, fill = survived)) +
   geom_bar(position = "fill") +
   facet_wrap(~sex) + 
   scale_y_continuous(labels = scales::percent) +
-  labs(title = "Supervivencia por Clase y Sexo",
-       subtitle = "Casi todas las mujeres de 1ª y 2ª clase sobrevivieron",
-       x = "Clase", y = "Porcentaje") +
+  scale_fill_manual(values = c("gray40", "dodgerblue")) +
   theme_minimal() +
-  scale_fill_manual(values = c("gray40", "dodgerblue"))
+  labs(title = "Supervivencia por Clase y Sexo",
+       x = "Clase", y = "Porcentaje")
 print(p7)
 
-# --- DENSIDAD MULTIVARIANTE ---
-# Edad vs Supervivencia separado por Clase
-p8 <- ggplot(df_analysis, aes(x = age, fill = survived)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(~pclass) +
-  labs(title = "Densidad de Edad por Clase y Supervivencia",
-       subtitle = "En 3ª clase, incluso los niños tuvieron dificultades",
-       x = "Edad", y = "Densidad") +
-  theme_minimal()
-print(p8)
+
+
+# --- MATRIZ DE CORRELACIÓN ---
+
+# Preparamos datos numéricos
+df_cor <- df_analysis %>%
+  mutate(sex_num = as.numeric(sex), 
+         survived_num = as.numeric(survived) - 1) %>%
+  select(age, fare_log, family_size, sex_num, survived_num)
+
+M <- cor(df_cor, use = "pairwise.complete.obs")
+
+# Mapa de calor
+corrplot(M, method = "color", type = "upper", order = "hclust", 
+         addCoef.col = "black", tl.col = "black", diag = FALSE,
+         title = "Mapa de Calor de Correlaciones", mar = c(0,0,1,0))
+
+
+
+
 
 
 # ------------------------------------------------------------------------------
-# 4. GRÁFICO INTERACTIVO (Plotly)
+# 4. GRÁFICO INTERACTIVO
 # ------------------------------------------------------------------------------
-# [cite_start]Requisito explícito de la práctica [cite: 663]
+
 p_inter <- ggplot(df_analysis, aes(x = age, y = fare_log, color = survived, 
                                    text = paste("Clase:", pclass, 
                                                 "<br>Sexo:", sex,
                                                 "<br>Familia:", family_size))) +
   geom_point(alpha = 0.6) +
-  labs(title = "Exploración Interactiva: Edad vs Tarifa", x = "Edad", y = "Log(Tarifa)") +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "Exploración Interactiva: Edad vs Tarifa", x = "Edad", y = "Log(Tarifa)")
 
-ggplotly(p_inter, tooltip = c("x", "y", "color", "text"))
+ggplotly(p_inter, tooltip = c("text"))
