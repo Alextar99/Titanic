@@ -174,6 +174,21 @@ ggplot(titanic, aes(x = pclass, y = fare)) +
   theme_minimal()
 
 porcentaje <- c("0%", "25%", "50%", "75%", "100%")
+tasa_promedio <- mean(titanic$survived == "Yes" | titanic$survived == "1", na.rm = TRUE)
+
+ggplot(titanic, aes(pclass, fill = survived)) +
+  geom_bar(position = "fill") +
+  scale_fill_brewer(palette = "Set1") +  # Rojo/Azul automático
+  scale_y_continuous(labels = scales::percent_format()) +
+  ylab("Survival Rate") +
+  geom_hline(yintercept = tasa_promedio, col = "white", lty = 2, size = 2) +
+  ggtitle("Survival Rate by Class") +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid.major.x = element_blank()
+  )
+
 ggplot(titanic, aes(pclass, fill=survived)) + geom_bar(position="fill") +
   scale_y_continuous(labels=porcentaje) + ylab("Survival Rate") +
   ggtitle("Survival Rate by Class") + facet_wrap(~embarked) + theme_minimal()
@@ -208,5 +223,6 @@ corrplot(cor(titanic_full), method="color", type="upper", order="hclust",
 cat("\n🎉 ANÁLISIS COMPLETO - OUTLIERS PRESERVADOS\n")
 cat("Justificación: Outliers Titanic = información histórica real valiosa\n")
 cat("Dataset final:", nrow(titanic), "filas | 100% completas | 0 info perdida\n")
+
 
 
