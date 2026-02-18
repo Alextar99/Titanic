@@ -138,6 +138,32 @@ print(p1)
 
 
 
+# --- Test de normalidad ---
+
+# Shapiro-Wilk
+test_shapiro <- shapiro.test(df_analysis$age)
+print(test_shapiro)
+
+
+# Interpretación:
+# p < 0.05 ---> la distribución no sigue una distribución normal
+
+if(test_shapiro$p.value < 0.05) {
+  cat("INTERPRETACIÓN: P-valor < 0.05.\n")
+  cat("-> RECHAZAMOS la normalidad. La edad NO sigue una distribución normal.\n")
+  cat("-> Por tanto, la MEDIANA es mejor medida de centralidad que la media.\n")
+} else {
+  cat("INTERPRETACIÓN: P-valor > 0.05.\n")
+  cat("-> No podemos rechazar la normalidad (los datos parecen normales).\n")
+}
+
+qqnorm(df_analysis$age, main = "QQ-Plot de la Edad", pch = 19, col = "gray50"); qqline(df_analysis$age, col = "red", lwd = 2)
+
+
+
+
+
+
 # --- Variable Numérica: TARIFA (Validación de Transformación) ---
 
 p2 <- ggplot(df_analysis, aes(x = fare_log)) +
@@ -159,7 +185,6 @@ p3 <- ggplot(df_analysis, aes(x = survived, fill = survived)) +
   theme_minimal() +
   labs(title = "Tasas de Supervivencia", x = "¿Sobrevivió?", y = "Pasajeros")
 print(p3)
-
 
 
 
