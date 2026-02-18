@@ -209,6 +209,67 @@ print(p4)
 
 
 
+
+
+# --- PUERTO DE EMBARQUE vs SUPERVIVENCIA ---
+# Hipótesis: El puerto influye indirectamente debido a la clase social de los pasajeros que embarcaron.
+
+# 1. Gráfico de Barras Apiladas (Porcentajes)
+p_embarked <- ggplot(df_analysis, aes(x = embarked, fill = survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Set1") + # Mantenemos la paleta del resto del script
+  theme_minimal() +
+  labs(title = "Supervivencia según Puerto de Embarque",
+       subtitle = "Cherbourg (C) presenta la mayor tasa de supervivencia (más 1ra clase)",
+       x = "Puerto (C = Cherbourg, Q = Queenstown, S = Southampton)", 
+       y = "Porcentaje")
+print(p_embarked)
+
+# 2. Validación Estadística (Chi-Cuadrado)
+# H0: La supervivencia es independiente del puerto.
+# H1: Hay relación entre el puerto y sobrevivir.
+test_embarked <- chisq.test(table(df_analysis$embarked, df_analysis$survived))
+print(test_embarked)
+
+# Interpretación automática
+if(test_embarked$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. Hay diferencias significativas según el puerto.\n")
+} else {
+  cat("RESULTADO: No hay diferencias significativas.\n")
+}
+
+
+# --- VALIDACIÓN DE HIPÓTESIS: CLASE vs PUERTO ---
+
+# Gráfico de Barras Apiladas (Clase dentro de cada Puerto)
+p_embarked_class <- ggplot(df_analysis, aes(x = embarked, fill = pclass)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Oranges") + # Usamos otra paleta para distinguir
+  theme_minimal() +
+  labs(title = "Distribución de Clases por Puerto",
+       x = "Puerto de Embarque", 
+       y = "Porcentaje de Pasajeros")
+print(p_embarked_class)
+
+# Tabla de Contingencia (Para ver los números exactos)
+tabla_puerto_clase <- table(df_analysis$embarked, df_analysis$pclass)
+print(addmargins(tabla_puerto_clase))
+
+# Porcentajes por fila (Para ver qué % de C eran de 1ra)
+print(round(prop.table(tabla_puerto_clase, margin = 1) * 100, 1))
+
+
+# El análisis visual y el test Chi-Cuadrado muestran que en Cherbourg la tasa de supervivencia es más alta, pero esto se debe 
+# a que en ese puerto embarcó una proporción mucho mayor de pasajeros de Primera Clase en comparación con Queenstown, 
+# donde la mayoría eran emigrantes de Tercera Clase. Por tanto, el puerto actúa como una variable 'proxy' del nivel socioeconómico.
+
+
+
+
+
+
 # --- EDAD vs SUPERVIVENCIA (Violin Plot + Boxplot) ---
 
 p5 <- ggplot(df_analysis, aes(x = survived, y = age, fill = survived)) +
