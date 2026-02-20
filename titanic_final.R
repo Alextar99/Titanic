@@ -1,4 +1,3 @@
-
 # ==============================================================================
 # CARGA DE LIBRERÍAS
 # ==============================================================================
@@ -32,6 +31,10 @@ head(df)
 
 
 
+
+
+
+
 # 2. Transformación y Limpieza
 # ------------------------------------------------------------------------------
 
@@ -40,11 +43,43 @@ df$fare <- as.numeric(gsub(",", ".", df$fare)) # Sustituimos coma por punto y pa
 df$age  <- as.numeric(df$age)
 df[df == ""] <- NA # Vacíos a NA
 
+
+
+
+
+# ¿Tener bote garantiza sobrevivir? ---
+
+# Creamos una columna temporal: ¿Tiene dato en 'boat'?
+df$tiene_bote <- ifelse(is.na(df$boat), "No Bote", "Sí Bote")
+
+# Tabla Cruzada: Supervivencia vs Tener Bote
+tabla_bote <- table(df$survived, df$tiene_bote)
+
+# Ponemos nombres bonitos a las filas (0=Muere, 1=Vive)
+rownames(tabla_bote) <- c("Muere", "Vive")
+
+cat("\n--- RELACIÓN BOTE vs SUPERVIVENCIA ---\n")
+print(tabla_bote)
+
+# Porcentajes para verlo más claro
+print(prop.table(tabla_bote, margin = 2) * 100)
+
+
+
+
+
+
 # Eliminación de variables con exceso de NAs
 # Según la Práctica 2, si faltan demasiados datos y no aportan, se pueden quitar
 summary(df)
 
 df <- df %>% select(-body, -boat, -home.dest)
+
+
+# Boat la eliminamos por dos razones. Primero, porque tenía más del 60% de valores perdidos. Pero la razón estadística más importante es 
+# que introduce 'Data Leakage'. La variable 'boat' es una consecuencia directa de sobrevivir, no una característica del 
+# pasajero (como la edad o la clase). Incluirla haría que cualquier análisis fuera trivial y redundante
+
 
 colSums(is.na(df))
 
@@ -61,14 +96,54 @@ df$embarked <- as.factor(df$embarked)
 
 
 
-# 3. Imputación Avanzada (k-NN para Age)
+# 3. Imputación Avanzada (k-NN para Age) - COMPARACIÓN DE DISTINTOS k
 # ------------------------------------------------------------------------------
 
-# Práctica 2: k-NN mantiene mejor la estructura que la media
-# Usamos df (que ya tiene fare y embarked limpios)
-df_imputed <- kNN(df, variable = c("age"), k = 5)
+# Evaluamos distintos k para elegir el más adecuado (que mantenga la estructura)
+k_candidatos <- 1:10
+resultados_k <- data.frame(k = integer(), media = numeric(), desv = numeric())
 
-# Nos quedamos solo con las columnas originales (VIM añade más columnas)
+# Datos originales con NA en age (para comparar distribución después de imputar)
+age_original <- df$age   # con NA
+
+par(mfrow = c(2,5))  # Para visualizar varios histogramas a la vez
+for (k_val in k_candidatos) {
+  # Imputamos con k actual
+  df_temp <- kNN(df, variable = "age", k = k_val)
+  age_imp <- df_temp$age   # columna imputada
+  
+  # Guardamos estadísticos
+  resultados_k <- rbind(resultados_k, 
+                        data.frame(k = k_val, 
+                                   media = mean(age_imp, na.rm = TRUE),
+                                   desv = sd(age_imp, na.rm = TRUE)))
+  
+  # Histograma para comparación visual
+  hist(age_imp, breaks = 30, main = paste("k =", k_val), 
+       xlab = "Edad", col = "skyblue", border = "white")
+}
+par(mfrow = c(1,1))
+
+# Mostramos estadísticos
+print(resultados_k)
+
+# Gráfico de evolución de media y desviación según k
+ggplot(resultados_k, aes(x = k)) +
+  geom_line(aes(y = media, color = "Media")) +
+  geom_point(aes(y = media, color = "Media")) +
+  geom_line(aes(y = desv, color = "Desv. típica")) +
+  geom_point(aes(y = desv, color = "Desv. típica")) +
+  scale_color_manual(values = c("Media" = "blue", "Desv. típica" = "red")) +
+  labs(title = "Estabilidad de la imputación k-NN según k",
+       x = "Número de vecinos (k)", y = "Valor") +
+  theme_minimal()
+
+# Elegimos un k (por ejemplo, k=5 porque a partir de ahí media y desviación se estabilizan)
+k_elegido <- 5
+cat("\nSe elige k =", k_elegido, "por estabilidad en media y desviación.\n")
+
+# Ahora imputamos con el k elegido
+df_imputed <- kNN(df, variable = c("age"), k = k_elegido)
 df_clean <- df_imputed[, 1:ncol(df)]
 
 
@@ -78,19 +153,24 @@ df_clean$family_size <- df_clean$sibsp + df_clean$parch + 1
 
 
 
-# 4. Tratamiento de Outliers (Fare)
+# 4. Tratamiento de Outliers (Fare) - COMPARACIÓN DE ASIMETRÍA
 # ------------------------------------------------------------------------------
 
 # Detección visual
 boxplot(df_clean$fare, main = "Outliers en Fare (Antes)")
 
+# Mostramos asimetría antes de transformar
+skew_antes <- skewness(df_clean$fare)
+cat("Asimetría de Fare (original):", skew_antes, "\n")
+
 # Transformación Logarítmica para reducir asimetría 
 df_clean$fare_log <- log(df_clean$fare + 1)  # +1 para evitar log(0)
 
-# Comprobación de asimetría
-cat("Fare Original:", skewness(df_clean$fare), "\n")
-cat("Fare Log:", skewness(df_clean$fare_log), " (Más cercano a 0 es mejor)\n")
+# Mostramos asimetría después de transformar
+skew_despues <- skewness(df_clean$fare_log)
+cat("Asimetría de Fare (log):", skew_despues, " (Más cercano a 0 es mejor)\n")
 
+# Comprobación de asimetría (ya impreso)
 boxplot(df_clean$fare_log, main = "Outliers en Fare (Después)")
 
 
@@ -315,20 +395,19 @@ print(p7)
 
 
 
-# --- MATRIZ DE CORRELACIÓN ---
-
-# Preparamos datos numéricos
+# --- MATRIZ DE CORRELACIÓN (SPEARMAN) ---
+# Se usa Spearman porque las variables no son normales (edad) y queremos relaciones monótonas robustas.
 df_cor <- df_analysis %>%
   mutate(sex_num = as.numeric(sex), 
          survived_num = as.numeric(survived) - 1) %>%
   select(age, fare_log, family_size, sex_num, survived_num)
 
-M <- cor(df_cor, use = "pairwise.complete.obs")
+M <- cor(df_cor, method = "spearman", use = "pairwise.complete.obs")
 
 # Mapa de calor
 corrplot(M, method = "color", type = "upper", order = "hclust", 
          addCoef.col = "black", tl.col = "black", diag = FALSE,
-         title = "Mapa de Calor de Correlaciones", mar = c(0,0,1,0))
+         title = "Mapa de Calor de Correlaciones (Spearman)", mar = c(0,0,1,0))
 
 
 
@@ -366,3 +445,22 @@ p_inter <- ggplot(df_analysis, aes(x = pclass, y = age, color = survived)) +
 
 # Generar el gráfico interactivo
 ggplotly(p_inter, tooltip = "text")
+
+
+
+
+
+
+# CLEAN UP #################################################
+
+# Clear environment
+rm(list = ls()) 
+
+# Clear packages
+detach("package:datasets", unload = TRUE)  # For base
+
+# Clear plots
+dev.off()  # But only if there IS a plot
+
+# Clear console
+cat("\014")
