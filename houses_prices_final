@@ -1,0 +1,572 @@
+
+# ==============================================================================
+# CARGA DE LIBRERÍAS
+# ==============================================================================
+
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+
+p_load(tidyverse, VIM, moments, plotly, fastDummies, corrplot, scales, naniar)
+
+# Ajustamos el directorio de trabajo
+setwd("C:/Users/albag/Downloads")  
+
+# ==============================================================================
+# A) PREPARACIÓN DE LOS DATOS
+# ==============================================================================
+
+
+# 1. Cargar datos y Descripción Inicial
+# ------------------------------------------------------------------------------
+
+datos <- read.csv("train.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+df    <- data.frame(datos)
+
+cat("Dimensiones:", nrow(df), "individuos y", ncol(df), "variables.\n")
+head(df)
+
+# Id es un simple identificador de fila, no aporta información analítica
+df <- df %>% select(-Id)
+
+
+
+# 2. Transformación y Limpieza
+# ------------------------------------------------------------------------------
+
+# Vacíos a NA para detectarlos con is.na()
+df[df == ""] <- NA
+
+# Corrección de tipos: variables que pueden llegar como character
+df$LotFrontage <- as.numeric(df$LotFrontage)
+df$MasVnrArea  <- as.numeric(df$MasVnrArea)
+df$GarageYrBlt <- as.numeric(df$GarageYrBlt)
+
+# Eliminación de variables con exceso de NAs (> 40%)
+# Si faltan demasiados datos y no aportan, se eliminan directamente
+summary(df)
+
+pct_missing <- colMeans(is.na(df)) * 100
+vars_exceso_na <- names(pct_missing[pct_missing > 40])
+cat("Variables eliminadas por exceso de NA (>40%):\n")
+print(vars_exceso_na)
+# PoolQC (99.5%), MiscFeature (96.4%), Alley (93.8%), Fence (80.8%), FireplaceQu (47.3%)
+
+df <- df %>% select(-all_of(vars_exceso_na))
+
+colSums(is.na(df))
+
+# Imputación de NAs residuales
+# Donde NA significa AUSENCIA REAL: 0 o "None"
+# Imputar con media/moda aquí sería inventar un garaje o sótano inexistente
+df$TotalBsmtSF[is.na(df$TotalBsmtSF)]   <- 0
+df$GarageArea[is.na(df$GarageArea)]     <- 0
+df$GarageCars[is.na(df$GarageCars)]     <- 0
+df$MasVnrArea[is.na(df$MasVnrArea)]     <- 0
+df$BsmtQual[is.na(df$BsmtQual)]         <- "None"
+df$BsmtCond[is.na(df$BsmtCond)]         <- "None"
+df$BsmtExposure[is.na(df$BsmtExposure)] <- "None"
+df$GarageType[is.na(df$GarageType)]     <- "None"
+df$GarageFinish[is.na(df$GarageFinish)] <- "None"
+df$GarageQual[is.na(df$GarageQual)]     <- "None"
+df$GarageCond[is.na(df$GarageCond)]     <- "None"
+df$MasVnrType[is.na(df$MasVnrType)]     <- "None"
+
+# MSZoning: dato no registrado → moda
+df$MSZoning[is.na(df$MSZoning)]         <- "RL"   # moda observada
+df$Electrical[is.na(df$Electrical)]     <- "SBrkr" # moda observada
+df$SaleType[is.na(df$SaleType)]         <- "WD"   # moda observada
+df$Functional[is.na(df$Functional)]     <- "Typ"  # moda observada
+
+# Conversión a Factores
+# Ordinales: escala documentada en el data dictionary de Kaggle (Po < Fa < TA < Gd < Ex)
+niveles_calidad <- c("None", "Po", "Fa", "TA", "Gd", "Ex")
+
+df$ExterQual    <- factor(df$ExterQual,    levels = niveles_calidad, ordered = TRUE)
+df$ExterCond    <- factor(df$ExterCond,    levels = niveles_calidad, ordered = TRUE)
+df$BsmtQual     <- factor(df$BsmtQual,     levels = niveles_calidad, ordered = TRUE)
+df$BsmtCond     <- factor(df$BsmtCond,     levels = niveles_calidad, ordered = TRUE)
+df$HeatingQC    <- factor(df$HeatingQC,    levels = niveles_calidad, ordered = TRUE)
+df$KitchenQual  <- factor(df$KitchenQual,  levels = niveles_calidad, ordered = TRUE)
+df$GarageQual   <- factor(df$GarageQual,   levels = niveles_calidad, ordered = TRUE)
+df$GarageCond   <- factor(df$GarageCond,   levels = niveles_calidad, ordered = TRUE)
+df$BsmtExposure <- factor(df$BsmtExposure, levels = c("None","No","Mn","Av","Gd"), ordered = TRUE)
+df$PavedDrive   <- factor(df$PavedDrive,   levels = c("N","P","Y"), ordered = TRUE)
+
+# Nominales: sin orden entre categorías
+df$Neighborhood  <- as.factor(df$Neighborhood)
+df$HouseStyle    <- as.factor(df$HouseStyle)
+df$RoofStyle     <- as.factor(df$RoofStyle)
+df$SaleType      <- as.factor(df$SaleType)
+df$SaleCondition <- as.factor(df$SaleCondition)
+df$Foundation    <- as.factor(df$Foundation)
+df$GarageType    <- as.factor(df$GarageType)
+df$MSZoning      <- as.factor(df$MSZoning)
+df$BldgType      <- as.factor(df$BldgType)
+
+
+
+# 3. Imputación Avanzada (k-NN para LotFrontage)
+# ------------------------------------------------------------------------------
+
+# k-NN mantiene mejor la estructura de la distribución que la mediana
+# LotFrontage (metros lineales de calle) está correlacionado con LotArea y Neighborhood
+df_imputed <- kNN(df, variable = "LotFrontage", k = 5)
+df_clean   <- df_imputed[, 1:ncol(df)]
+
+
+
+# 4. Resumen de variables conservadas
+# ------------------------------------------------------------------------------
+
+# Se conservan todas las variables numéricas tras la imputación.
+# El único criterio de eliminación aplicado fue NA > 40% (paso 2).
+# Variables como FullBath, BedroomAbvGr, GarageCars o Fireplaces
+# tienen distribución suficientemente repartida para ser informativas.
+cat("\nDimensiones tras imputación (antes de Feature Engineering):",
+    nrow(df_clean), "individuos y", ncol(df_clean), "variables.\n")
+
+
+
+# 5. Feature Engineering
+# ------------------------------------------------------------------------------
+
+# Área total = superficie habitable + sótano (más informativa que cada una por separado)
+df_clean$TotalSF    <- df_clean$GrLivArea + df_clean$TotalBsmtSF
+
+# Antigüedad de la vivienda en el momento de la venta
+df_clean$House_Age  <- df_clean$YrSold - df_clean$YearBuilt
+
+# ¿Ha sido reformada alguna vez?
+df_clean$Remodeled  <- factor(ifelse(df_clean$YearRemodAdd > df_clean$YearBuilt, "Sí", "No"))
+
+
+
+# 6. Tratamiento de Outliers (SalePrice)
+# ------------------------------------------------------------------------------
+
+# Detección visual
+boxplot(df_clean$SalePrice, main = "Outliers en SalePrice (Antes)", col = "coral")
+
+# Transformación Logarítmica para reducir la asimetría positiva (cola derecha)
+df_clean$SalePrice_log <- log(df_clean$SalePrice + 1)
+
+cat("SalePrice Original — Asimetría:", round(skewness(df_clean$SalePrice), 3), "\n")
+cat("SalePrice Log      — Asimetría:", round(skewness(df_clean$SalePrice_log), 3),
+    " (Más cercano a 0 es mejor)\n")
+
+boxplot(df_clean$SalePrice_log, main = "Outliers en SalePrice (Después, escala log)",
+        col = "lightgreen")
+
+
+
+# 7. One Hot Encoding (Opcional para gráficos, necesario para modelos)
+# ------------------------------------------------------------------------------
+
+df_dummies <- dummy_cols(df_clean,
+                          select_columns    = c("ExterQual", "KitchenQual", "Neighborhood"),
+                          remove_first_dummy = TRUE)
+
+# Dataset final para Análisis (EDA)
+df_analysis <- df_clean
+
+# Resumen final del conjunto
+summary(df_analysis)
+cat("NAs restantes:", sum(is.na(df_analysis)), "\n")
+cat("Dimensiones finales:", nrow(df_analysis), "individuos y",
+    ncol(df_analysis), "variables.\n")
+
+
+
+
+# ==============================================================================
+# B) ANÁLISIS EXPLORATORIO DE DATOS (EDA)
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# 1. ANÁLISIS UNIVARIANTE
+# ------------------------------------------------------------------------------
+
+
+# --- Variable Continua: PRECIO DE VENTA (Histograma + Densidad) ---
+
+p1 <- ggplot(df_analysis, aes(x = SalePrice)) +
+  geom_histogram(aes(y = ..density..), bins = 40, fill = "steelblue", color = "white") +
+  geom_density(alpha = 0.2, fill = "coral") +
+  scale_x_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Distribución del Precio de Venta",
+       subtitle = "Distribución log-normal con sesgo positivo (cola derecha larga)",
+       x = "Precio de Venta (USD)", y = "Densidad")
+print(p1)
+
+
+# --- Test de normalidad (Shapiro-Wilk) ---
+
+# Shapiro-Wilk requiere n ≤ 5000; con 1.460 filas se pasa directamente
+test_shapiro <- shapiro.test(df_analysis$SalePrice)
+print(test_shapiro)
+
+if (test_shapiro$p.value < 0.05) {
+  cat("INTERPRETACIÓN: P-valor < 0.05.\n")
+  cat("-> RECHAZAMOS la normalidad. SalePrice NO sigue una distribución normal.\n")
+  cat("-> La MEDIANA es mejor medida de centralidad que la media.\n")
+} else {
+  cat("INTERPRETACIÓN: P-valor > 0.05.\n")
+  cat("-> No podemos rechazar la normalidad.\n")
+}
+
+qqnorm(df_analysis$SalePrice, main = "QQ-Plot de SalePrice", pch = 19, col = "gray50")
+qqline(df_analysis$SalePrice, col = "red", lwd = 2)
+
+
+# --- Variable Continua: PRECIO DE VENTA TRANSFORMADO (Validación) ---
+
+p2 <- ggplot(df_analysis, aes(x = SalePrice_log)) +
+  geom_histogram(bins = 40, fill = "purple", color = "white", alpha = 0.7) +
+  theme_minimal() +
+  labs(title    = "Distribución del Precio de Venta (Log)",
+       subtitle = "La transformación logarítmica ha corregido el sesgo positivo",
+       x = "Log(SalePrice)", y = "Frecuencia")
+print(p2)
+
+
+# --- Variable Categórica Ordinal: CALIDAD EXTERIOR ---
+
+p3 <- ggplot(df_analysis, aes(x = ExterQual, fill = ExterQual)) +
+  geom_bar() +
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5) +
+  scale_fill_brewer(palette = "RdYlGn") +
+  theme_minimal() +
+  labs(title    = "Calidad del Material Exterior (ExterQual)",
+       subtitle = "Escala ordenada: Po < Fa < TA < Gd < Ex",
+       x = "Calidad Exterior", y = "Número de Viviendas")
+print(p3)
+
+
+# --- Variable Categórica Nominal: ESTILO DE VIVIENDA ---
+
+p4 <- df_analysis %>%
+  count(HouseStyle) %>%
+  ggplot(aes(x = reorder(HouseStyle, n), y = n, fill = HouseStyle)) +
+  geom_col() +
+  geom_text(aes(label = n), hjust = -0.2) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Frecuencia por Estilo de Vivienda (HouseStyle)",
+       x = "Estilo", y = "Número de Viviendas")
+print(p4)
+
+
+
+
+# --- Variable Discreta: BAÑOS COMPLETOS ---
+# FullBath es una variable discreta (0, 1, 2, 3): barplot de frecuencias
+
+p4b <- df_analysis %>%
+  count(FullBath) %>%
+  mutate(FullBath = factor(FullBath)) %>%
+  ggplot(aes(x = FullBath, y = n, fill = FullBath)) +
+  geom_col() +
+  geom_text(aes(label = n), vjust = -0.5) +
+  scale_fill_brewer(palette = "Blues") +
+  theme_minimal() +
+  labs(title    = "Número de Baños Completos (FullBath)",
+       subtitle = "Variable discreta: la mayoría de viviendas tienen 1 o 2 baños completos",
+       x = "Nº de Baños Completos", y = "Número de Viviendas")
+print(p4b)
+
+
+# --- Variable Discreta: PLAZAS DE GARAJE ---
+# GarageCars: capacidad del garaje en número de coches
+
+p4c <- df_analysis %>%
+  count(GarageCars) %>%
+  mutate(GarageCars = factor(GarageCars)) %>%
+  ggplot(aes(x = GarageCars, y = n, fill = GarageCars)) +
+  geom_col() +
+  geom_text(aes(label = n), vjust = -0.5) +
+  scale_fill_brewer(palette = "Oranges") +
+  theme_minimal() +
+  labs(title    = "Capacidad del Garaje (GarageCars)",
+       subtitle = "Variable discreta: garaje para 2 coches es el más frecuente",
+       x = "Plazas de Garaje", y = "Número de Viviendas")
+print(p4c)
+
+
+# ------------------------------------------------------------------------------
+# 2. ANÁLISIS BIVARIANTE (Relaciones Clave)
+# ------------------------------------------------------------------------------
+
+
+# --- CALIDAD EXTERIOR vs PRECIO ---
+# Hipótesis: A mayor calidad exterior, mayor precio de venta.
+
+p5 <- ggplot(df_analysis, aes(x = ExterQual, y = SalePrice, fill = ExterQual)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  scale_fill_brewer(palette = "RdYlGn") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Precio de Venta según Calidad Exterior",
+       subtitle = "A mejor calidad, mayor precio y menor dispersión",
+       x = "Calidad Exterior (Po < Fa < TA < Gd < Ex)", y = "Precio de Venta (USD)")
+print(p5)
+
+# Validación estadística: Kruskal-Wallis (no asume normalidad)
+# H0: La distribución del precio es igual en todos los niveles de calidad
+# H1: Al menos un nivel de calidad tiene distribución de precio diferente
+test_kruskal <- kruskal.test(SalePrice ~ ExterQual, data = df_analysis)
+print(test_kruskal)
+
+if (test_kruskal$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. Hay diferencias significativas de precio según la calidad exterior.\n")
+} else {
+  cat("RESULTADO: No hay diferencias significativas.\n")
+}
+
+
+# --- BARRIO vs PRECIO ---
+# Hipótesis: La ubicación (Neighborhood) es uno de los factores más determinantes del precio.
+
+# 1. Top 10 barrios por precio mediano
+p6 <- df_analysis %>%
+  group_by(Neighborhood) %>%
+  summarise(mediana = median(SalePrice), n = n()) %>%
+  arrange(desc(mediana)) %>%
+  slice(1:10) %>%
+  ggplot(aes(x = reorder(Neighborhood, mediana), y = mediana, fill = mediana)) +
+  geom_col() +
+  geom_text(aes(label = scales::dollar(mediana, scale = 0.001, suffix = "k")),
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_y_continuous(labels = scales::dollar_format(), expand = c(0, 0, 0.15, 0)) +
+  theme_minimal() +
+  labs(title    = "Top 10 Barrios por Precio Mediano",
+       subtitle = "La ubicación tiene un impacto directo y muy relevante en el precio",
+       x = "Barrio", y = "Precio Mediano (USD)")
+print(p6)
+
+# 2. Validación estadística (Kruskal-Wallis)
+# H0: El precio es igual independientemente del barrio
+# H1: Hay barrios con distribución de precios significativamente diferente
+test_barrio <- kruskal.test(SalePrice ~ Neighborhood, data = df_analysis)
+print(test_barrio)
+
+if (test_barrio$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. El barrio tiene un efecto significativo sobre el precio.\n")
+} else {
+  cat("RESULTADO: No hay diferencias significativas entre barrios.\n")
+}
+
+# El barrio actúa como variable 'proxy' del nivel socioeconómico de la zona:
+# NoRidge, NridgHt y StoneBr tienen precios medianos muy superiores a la media,
+# mientras que MeadowV o BrDale concentran las viviendas más económicas.
+
+
+# --- SUPERFICIE vs PRECIO ---
+# Hipótesis: A mayor superficie habitable, mayor precio de venta.
+
+p7 <- ggplot(df_analysis, aes(x = GrLivArea, y = SalePrice)) +
+  geom_point(alpha = 0.4, color = "steelblue", size = 1.5) +
+  geom_smooth(method = "lm", color = "firebrick", se = TRUE) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Superficie Habitable vs Precio de Venta",
+       subtitle = paste("Correlación de Pearson:",
+                        round(cor(df_analysis$GrLivArea, df_analysis$SalePrice), 3)),
+       x = "Superficie Habitable (pies²)", y = "Precio de Venta (USD)")
+print(p7)
+
+
+# --- ANTIGÜEDAD vs PRECIO ---
+# Hipótesis: Las viviendas más recientes o reformadas mantienen mejor su valor.
+
+p8 <- ggplot(df_analysis, aes(x = House_Age, y = SalePrice, color = Remodeled)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  geom_smooth(method = "loess", se = FALSE, linetype = "dashed") +
+  scale_color_manual(values = c("Sí" = "forestgreen", "No" = "firebrick")) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Precio de Venta según Antigüedad de la Vivienda",
+       subtitle = "Las viviendas reformadas (verde) tienden a mantener mejor su valor",
+       x = "Antigüedad en el momento de la venta (años)",
+       y = "Precio de Venta (USD)", color = "¿Reformada?")
+print(p8)
+
+
+# --- GARAJE vs PRECIO ---
+# Hipótesis: A mayor capacidad de garaje, mayor precio de venta.
+
+p_garage <- ggplot(df_analysis, aes(x = factor(GarageCars), y = SalePrice,
+                                     fill = factor(GarageCars))) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  scale_fill_brewer(palette = "Oranges") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Precio de Venta según Capacidad del Garaje",
+       subtitle = paste("Kruskal-Wallis p <", format.pval(
+         kruskal.test(SalePrice ~ factor(GarageCars), data = df_analysis)$p.value, digits = 2)),
+       x = "Plazas de Garaje (GarageCars)", y = "Precio de Venta (USD)",
+       fill = "Plazas")
+print(p_garage)
+
+test_garage <- kruskal.test(SalePrice ~ factor(GarageCars), data = df_analysis)
+print(test_garage)
+if (test_garage$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. La capacidad del garaje tiene un efecto significativo sobre el precio.\n")
+}
+
+
+# --- CHIMENEAS vs PRECIO ---
+# Hipótesis: Tener chimeneas añade valor a la vivienda.
+
+p_fire <- ggplot(df_analysis, aes(x = factor(Fireplaces), y = SalePrice,
+                                   fill = factor(Fireplaces))) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  scale_fill_brewer(palette = "Reds") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Precio de Venta según Número de Chimeneas",
+       subtitle = "Las viviendas con más chimeneas tienden a tener precios más altos",
+       x = "Número de Chimeneas (Fireplaces)", y = "Precio de Venta (USD)",
+       fill = "Chimeneas")
+print(p_fire)
+
+test_fire <- kruskal.test(SalePrice ~ factor(Fireplaces), data = df_analysis)
+print(test_fire)
+if (test_fire$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. El número de chimeneas tiene un efecto significativo sobre el precio.\n")
+}
+
+
+# --- TIPO DE VENTA vs RANGO DE PRECIO ---
+# Hipótesis: El tipo de venta está asociado al nivel de precio.
+
+df_analysis$PriceRange <- cut(df_analysis$SalePrice,
+                               breaks        = quantile(df_analysis$SalePrice, c(0, 0.33, 0.66, 1)),
+                               labels        = c("Bajo","Medio","Alto"),
+                               include.lowest = TRUE)
+
+p_saletype <- ggplot(df_analysis, aes(x = SaleType, fill = PriceRange)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Blues") +
+  theme_minimal() +
+  labs(title    = "Distribución del Rango de Precio por Tipo de Venta",
+       subtitle = "Las ventas 'New' (vivienda nueva) concentran los precios más altos",
+       x = "Tipo de Venta", y = "Porcentaje")
+print(p_saletype)
+
+# Validación estadística (Chi-Cuadrado)
+# H0: El rango de precio es independiente del tipo de venta
+# H1: Hay relación entre el tipo de venta y el rango de precio
+tabla_sale  <- table(df_analysis$SaleType, df_analysis$PriceRange)
+test_chi    <- chisq.test(tabla_sale)
+print(test_chi)
+
+if (test_chi$p.value < 0.05) {
+  cat("RESULTADO: p-value < 0.05. El tipo de venta está significativamente asociado al rango de precio.\n")
+} else {
+  cat("RESULTADO: No hay asociación significativa entre tipo de venta y precio.\n")
+}
+
+# Tabla de contingencia con porcentajes por fila
+print(round(prop.table(tabla_sale, margin = 1) * 100, 1))
+
+
+
+
+# ------------------------------------------------------------------------------
+# 3. ANÁLISIS MULTIVARIANTE
+# ------------------------------------------------------------------------------
+
+
+# --- SUPERFICIE × CALIDAD × PRECIO ---
+# La pendiente precio/superficie es más pronunciada en viviendas de mayor calidad.
+# Las viviendas excelentes (Ex) salen más caras por pie² adicional que las normales (TA).
+
+p9 <- ggplot(df_analysis, aes(x = GrLivArea, y = SalePrice, color = ExterQual)) +
+  geom_point(alpha = 0.4, size = 1.2) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.9) +
+  facet_wrap(~ ExterQual, nrow = 1) +
+  scale_color_brewer(palette = "RdYlGn") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Superficie vs Precio por Nivel de Calidad Exterior",
+       subtitle = "La pendiente es más pronunciada en viviendas de calidad Ex y Gd",
+       x = "Superficie Habitable (pies²)", y = "Precio de Venta (USD)")
+print(p9)
+
+
+# --- CALIDAD DE COCINA × REFORMADA × PRECIO ---
+# La reforma tiene mayor impacto en viviendas de calidad media (TA, Gd)
+
+p10 <- ggplot(df_analysis, aes(x = KitchenQual, y = SalePrice, fill = Remodeled)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  scale_fill_manual(values = c("Sí" = "forestgreen", "No" = "firebrick")) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  labs(title    = "Precio según Calidad de Cocina y si ha sido Reformada",
+       subtitle = "La reforma tiene mayor impacto en viviendas con cocina de calidad media",
+       x = "Calidad de Cocina", y = "Precio de Venta (USD)", fill = "¿Reformada?")
+print(p10)
+
+
+# --- MATRIZ DE CORRELACIÓN ---
+
+df_cor <- df_analysis %>%
+  mutate(ExterQual_num   = as.numeric(ExterQual),
+         KitchenQual_num = as.numeric(KitchenQual)) %>%
+  select(SalePrice, GrLivArea, LotArea, TotalBsmtSF, TotalSF,
+         House_Age, OverallQual, FullBath, GarageCars, Fireplaces,
+         BedroomAbvGr, ExterQual_num, KitchenQual_num)
+
+M <- cor(df_cor, use = "pairwise.complete.obs")
+
+corrplot(M,
+         method      = "color",
+         type        = "upper",
+         order       = "hclust",
+         addCoef.col = "black",
+         tl.col      = "black",
+         diag        = FALSE,
+         title       = "Mapa de Calor de Correlaciones",
+         mar         = c(0, 0, 1, 0))
+
+
+
+
+# ------------------------------------------------------------------------------
+# 4. GRÁFICO INTERACTIVO
+# ------------------------------------------------------------------------------
+
+p_inter <- ggplot(df_analysis, aes(x = ExterQual, y = SalePrice, color = Remodeled)) +
+
+  # Caja de fondo (transparente) para referencia estadística
+  geom_boxplot(width = 0.4, fill = "white", alpha = 0, outlier.shape = NA) +
+
+  # Puntos con jitter
+  geom_jitter(aes(text = paste("<b>Vivienda</b>",
+                               "<br>Precio:",      scales::dollar(SalePrice),
+                               "<br>Superficie:",  GrLivArea, "pies²",
+                               "<br>Barrio:",      Neighborhood,
+                               "<br>Cal. cocina:", KitchenQual,
+                               "<br>Antigüedad:",  House_Age, "años",
+                               "<br>Reformada:",   Remodeled,
+                               "<br>Baños:",       FullBath,
+                               "<br>Garaje:",      GarageCars, "plaza(s)",
+                               "<br>Chimeneas:",   Fireplaces)),
+              width = 0.2, alpha = 0.6, size = 2) +
+
+  scale_color_manual(values = c("Sí" = "forestgreen", "No" = "firebrick"),
+                     name   = "¿Reformada?") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(title    = "Distribución Interactiva: Precio por Calidad Exterior",
+       subtitle = "Pasa el ratón para ver los detalles de cada vivienda. (Verde = Reformada)",
+       x        = "Calidad Exterior (Po < Fa < TA < Gd < Ex)",
+       y        = "Precio de Venta (USD)") +
+  theme_minimal()
+
+ggplotly(p_inter, tooltip = "text")
