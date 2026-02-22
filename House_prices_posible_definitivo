@@ -260,6 +260,52 @@ cat("\n", strrep("=", 65), "\n")
 cat("PASO 6 — DIAGNÓSTICO DE OUTLIERS (Hubert & Vandervieren)\n")
 cat(strrep("=", 65), "\n")
 
+# ==============================================================
+# Gráfico: Justificación de la imputación de LotFrontage por Barrio
+# ==============================================================
+
+# 1. Calculamos la mediana de fachada para cada barrio
+#    y reordenamos los niveles del factor para que el gráfico 
+#    salga ordenado de menor a mayor tamaño de parcela.
+train_frontage <- train %>%
+  group_by(Neighborhood) %>%
+  mutate(median_frontage = median(LotFrontage, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Neighborhood = fct_reorder(Neighborhood, median_frontage))
+
+# 2. Construimos el Boxplot con ggplot2
+p_frontage <- ggplot(train_frontage, aes(x = Neighborhood, y = LotFrontage, fill = Neighborhood)) +
+  # Usamos geom_boxplot para ver medianas, cajas (Rango Intercuartílico) y outliers
+  geom_boxplot(outlier.alpha = 0.4, outlier.size = 1.2, width = 0.6) +
+  # Añadimos la mediana global de todo el pueblo como línea de referencia
+  geom_hline(yintercept = median(train$LotFrontage, na.rm = TRUE), 
+             color = "#D7191C", linetype = "dashed", linewidth = 1) +
+  # Anotación explicativa de la línea roja
+  annotate("text", x = 3, y = median(train$LotFrontage, na.rm = TRUE) + 5, 
+           label = "Mediana Global Ames", color = "#D7191C", fontface = "bold", size = 3.5) +
+  # Configuramos las escalas y paleta de colores
+  scale_y_continuous(breaks = seq(0, max(train$LotFrontage, na.rm=T), by = 25)) +
+  scale_fill_viridis_d(option = "plasma") +
+  # Etiquetas y títulos
+  labs(
+    title = "Distribución de metros de fachada (LotFrontage) por Barrio",
+    subtitle = "La variabilidad entre barrios justifica por qué se ha imputado usando la mediana local\nen lugar de la mediana global (línea roja discontinua).",
+    x = "Barrio (Neighborhood)",
+    y = "Fachada conectada a la calle (Pies lineales)"
+  ) +
+  # Aplicamos el tema personalizado y rotamos las etiquetas X para que no se pisen
+  theme_hp +
+  theme(
+    legend.position = "none",  # Ocultamos la leyenda porque el eje X ya dice el barrio
+    axis.text.x = element_text(angle = 45, hjust = 1, face = "bold")
+  )
+
+# Mostramos el gráfico
+print(p_frontage)
+
+
+
+
 # --- Justificación Visual: Tukey vs Boxplot Ajustado ---
 # Tomamos SalePrice como ejemplo de distribución asimétrica positiva
 
