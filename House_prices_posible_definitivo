@@ -9,39 +9,30 @@
 # ==============================================================
 # 0. INSTALACIÓN Y CARGA DE LIBRERÍAS
 # ==============================================================
-
 rm(list = ls())
-dev.off()
+graphics.off() # Limpia gráficos previos sin dar error si no hay ninguno
 
-pkgs <- c(
-  "tidyverse", "skimr",    "naniar",   "corrplot",
-  "plotly",    "scales",   "gridExtra","moments",
-  "ggridges",  "viridis",  "ggrepel"
-)
-for (p in pkgs) {
-  if (!requireNamespace(p, quietly = TRUE)) install.packages(p)
+# Instala pacman si el sistema no lo tiene
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman")
 }
 
-library(tidyverse)
-library(skimr)
-library(naniar)
-library(corrplot)
-library(plotly)
-library(scales)
-library(gridExtra)
-library(moments)
-library(ggridges)
-library(viridis)
-library(ggrepel)
+# p_load comprueba, instala (si falta) y carga todas las librerías de golpe
+pacman::p_load(
+  tidyverse, skimr, naniar, corrplot,
+  plotly, scales, gridExtra, moments,
+  ggridges, viridis, ggrepel, nortest,
+  robustbase, VIM
+)
 
 # Tema gráfico personalizado
 theme_hp <- theme_minimal(base_size = 11) +
   theme(
-    plot.title    = element_text(face = "bold", size = 13, hjust = 0),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0),
     plot.subtitle = element_text(color = "grey40", size = 10),
-    axis.title    = element_text(size = 10),
-    legend.title  = element_text(face = "bold", size = 9),
-    strip.text    = element_text(face = "bold")
+    axis.title = element_text(size = 10),
+    legend.title = element_text(face = "bold", size = 9),
+    strip.text = element_text(face = "bold")
   )
 
 
