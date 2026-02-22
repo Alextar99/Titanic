@@ -10,20 +10,21 @@
 # 0. INSTALACIÓN Y CARGA DE LIBRERÍAS
 # ==============================================================
 rm(list = ls())
-graphics.off() # Limpia gráficos previos sin dar error si no hay ninguno
+graphics.off() 
 
-# Instala pacman si el sistema no lo tiene
+
 if (!requireNamespace("pacman", quietly = TRUE)) {
   install.packages("pacman")
 }
 
-# p_load comprueba, instala (si falta) y carga todas las librerías de golpe
+# Se añaden las librerías para transformación, normalidad, estandarización y dummies
 pacman::p_load(
   tidyverse, skimr, naniar, corrplot,
   plotly, scales, gridExtra, moments,
   ggridges, viridis, ggrepel, nortest,
-  robustbase, VIM
+  robustbase, VIM, editrules, MASS, car, dlookr, fastDummies
 )
+
 
 # Tema gráfico personalizado
 theme_hp <- theme_minimal(base_size = 11) +
@@ -114,7 +115,8 @@ vars_insig <- miss_df$Variable[miss_df$Pct_Missing > umbral_na]
 cat(sprintf("\nVariables eliminadas por exceso de NAs (>%d%%) al no aportar información: %s\n", 
             umbral_na, paste(vars_insig, collapse = ", ")))
 
-train <- train %>% select(-all_of(vars_insig))
+train <- train %>% dplyr::select(-all_of(vars_insig))
+
 
 # --- PASO 2: Imputación semántica (según data dictionary) -----
 na_none_cat <- c(
@@ -158,40 +160,39 @@ train$Electrical[is.na(train$Electrical)] <- moda_elec
 # porque las operaciones aritméticas requieren valores numéricos.
 yr_num <- as.integer(as.character(train$YrSold))
 
+# Transformación de Box-Cox rigurosa (Sustituye al logaritmo manual logSalePrice)
+# 1. Obtenemos el vector limpio sin NAs y estrictamente positivo
+precio_limpio <- train$SalePrice[!is.na(train$SalePrice) & train$SalePrice > 0]
+
+# 2. Buscamos el parámetro lambda óptimo maximizando la log-verosimilitud
+b_cox <- boxcox(lm(precio_limpio ~ 1), plotit = FALSE)
+lambda_opt <- b_cox$x[which.max(b_cox$y)]
+cat(sprintf("\nLambda óptimo de Box-Cox para SalePrice: %.4f\n", lambda_opt))
+
+
 train <- train %>%
   mutate(
-    # Antigüedad de la vivienda en el momento de la venta
-    HouseAge     = yr_num - YearBuilt,
-    # Años desde la última remodelación
-    RemodAge     = yr_num - YearRemodAdd,
-    # Superficie total: sótano + planta baja + planta alta
-    TotalSF      = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
-    # Baños totales: completos cuentan 1, medios baños 0.5
-    # (convención estándar del sector inmobiliario)
-    TotalBaths   = FullBath + 0.5 * HalfBath +
-      BsmtFullBath + 0.5 * BsmtHalfBath,
-    # Variables indicadoras: presencia de la característica
-    HasPool      = factor(ifelse(PoolArea    > 0, "Sí", "No")),
-    HasGarage    = factor(ifelse(GarageArea  > 0, "Sí", "No")),
-    HasFireplace = factor(ifelse(Fireplaces  > 0, "Sí", "No")),
-    HasBasement  = factor(ifelse(TotalBsmtSF > 0, "Sí", "No")),
-    # Transformación logarítmica de la variable respuesta
-    # (normaliza la distribución sesgada de SalePrice)
-    logSalePrice = log(SalePrice)
+    SalePrice_BC  = (SalePrice^lambda_opt - 1) / lambda_opt,
+    HouseAge      = yr_num - YearBuilt,
+    RemodAge      = yr_num - YearRemodAdd,
+    TotalSF       = TotalBsmtSF + FlrSF_1st + FlrSF_2nd, # TotalSF se crea aquí
+    TotalBaths    = FullBath + 0.5 * HalfBath + BsmtFullBath + 0.5 * BsmtHalfBath,
+    HasPool       = factor(ifelse(PoolArea > 0, "Sí", "No")),
+    HasGarage     = factor(ifelse(GarageArea > 0, "Sí", "No")),
+    HasFireplace  = factor(ifelse(Fireplaces > 0, "Sí", "No")),
+    HasBasement   = factor(ifelse(TotalBsmtSF > 0, "Sí", "No"))
   ) %>%
   mutate(
-    # "Feature reina": calidad general × superficie total
-    # Captura simultáneamente tamaño Y calidad → correlación ~0.88
     QualSF       = as.integer(OverallQual) * TotalSF,
-    # Superficie total de porches
     TotalPorchSF = OpenPorchSF + EnclosedPorch + Porch_3Ssn + ScreenPorch
   )
 
 # Verificar correlación de las nuevas variables con SalePrice
 new_feats <- c("QualSF", "TotalSF", "TotalBaths",
-               "TotalPorchSF", "HouseAge", "RemodAge", "SalePrice")
+               "TotalPorchSF", "HouseAge", "RemodAge", "SalePrice", "SalePrice_BC")
+
 cor_new <- cor(
-  train %>% select(all_of(new_feats)),
+  train %>% dplyr::select(all_of(new_feats)),
   use = "pairwise.complete.obs"
 )["SalePrice", ] %>% sort(decreasing = TRUE)
 
@@ -241,6 +242,36 @@ if (n_na_restantes > 0) {
 }
 
 
+# --- PASO 5.5: Detección de Inconsistencias Lógicas (editrules) ---
+# Se ejecuta DESPUÉS de la imputación para no contaminar con NAs
+cat("\n--- Verificación de Reglas Lógicas (post-imputación) ---\n")
+reglas_vivienda <- editset(c(
+  "SalePrice > 0",
+  "LotArea > 0",
+  "TotalBsmtSF >= 0",
+  "GrLivArea >= FlrSF_1st",
+  "YearBuilt <= YrSold"
+))
+
+train_num_check <- train %>%
+  mutate(YrSold = as.integer(as.character(YrSold))) %>%  
+  dplyr::select(SalePrice, LotArea, TotalBsmtSF, GrLivArea, FlrSF_1st, YearBuilt, YrSold) 
+
+
+violaciones <- violatedEdits(reglas_vivienda, train_num_check)
+
+print(summary(violaciones))
+
+# Solo generar el gráfico si se detecta al menos 1 violación lógica
+if (sum(violaciones, na.rm = TRUE) > 0) {
+  # IMPORTANTE: Se quita el argumento 'main' porque editrules genera el suyo propio
+  plot(violaciones)
+} else {
+  cat("\n✓ Datos lógicamente consistentes: No se detectaron violaciones de edición.\n")
+  cat("  (Se omite el gráfico de frecuencias de error).\n")
+}
+
+
 
 # ==============================================================
 # a.4) TRATAMIENTO DE OUTLIERS E IMPUTACIÓN k-NN
@@ -264,6 +295,9 @@ cat(strrep("=", 65), "\n")
 
 # --- Justificación Visual: Tukey vs Boxplot Ajustado ---
 # Tomamos SalePrice como ejemplo de distribución asimétrica positiva
+
+options(mc_doScale_quiet = TRUE)
+
 sp_clean <- train$SalePrice[!is.na(train$SalePrice)]
 q1 <- quantile(sp_clean, 0.25)
 q3 <- quantile(sp_clean, 0.75)
@@ -330,8 +364,8 @@ vars_plot <- c("SalePrice", "GrLivArea", "LotArea", "TotalSF")
 
 # Preparamos los datos en formato largo para ggplot
 df_comp <- bind_rows(
-  train_pre_outliers %>% select(all_of(vars_plot)) %>% mutate(Fase = "1. Original (Con Outliers)"),
-  train %>% select(all_of(vars_plot)) %>% mutate(Fase = "2. Post-Imputación (k-NN, k=5)")
+  train_pre_outliers %>% dplyr::select(all_of(vars_plot)) %>% mutate(Fase = "1. Original (Con Outliers)"),
+  train %>% dplyr::select(all_of(vars_plot)) %>% mutate(Fase = "2. Post-Imputación (k-NN, k=5)")
 ) %>%
   pivot_longer(cols = -Fase, names_to = "Variable", values_to = "Valor")
 
@@ -356,6 +390,27 @@ print(p_comparativa)
 
 cat("\n✓ Tratamiento de outliers completado: Datos extremos suavizados mediante k-NN.\n")
 
+# --- PASO 8: Estandarización de variables numéricas (Z-Score) --
+cat("\nPASO 8 — Estandarización Z-Score (dlookr)\n")
+# Ajustamos variables continuas a una escala común sin perder el impacto de los outliers
+vars_a_escalar <- c("GrLivArea", "LotArea", "TotalBsmtSF", "TotalSF")
+
+for (v in vars_a_escalar) {
+  var_z <- paste0(v, "_z") # Creamos nuevas columnas escaladas
+  train[[var_z]] <- dlookr::transform(train[[v]], method = "zscore")
+}
+
+# --- PASO 9: One Hot Encoding (Evitando Dummy Variable Trap) ---
+cat("\nPASO 9 — One Hot Encoding (fastDummies)\n")
+vars_categoricas_clave <- c("Neighborhood", "BldgType", "SaleCondition")
+
+# Aplicamos dummy_cols eliminando la primera categoría base (remove_first_dummy = TRUE)
+# para evitar multicolinealidad perfecta (trampa de la variable cualitativa)
+train <- dummy_cols(train, 
+                    select_columns = vars_categoricas_clave,
+                    remove_first_dummy = TRUE, 
+                    remove_selected_columns = FALSE) # Se conservan para el EDA
+cat("Variables dummy de Neighborhood, BldgType y SaleCondition creadas exitosamente.\n")
 
 
 # --------------------------------------------------------------
@@ -384,17 +439,35 @@ print(skim(train))
 
 
 # ------------------------------------------------------------------
-# BLOQUE 0 — Prueba de normalidad de la variable respuesta
+# BLOQUE 0 — Prueba de normalidad y QQ-Plots con Bandas de Confianza
 # ------------------------------------------------------------------
 cat("\n", strrep("=", 65), "\n")
-cat("PRUEBA DE NORMALIDAD DE LILLIEFORS (SalePrice)\n")
+cat("ANÁLISIS DE NORMALIDAD: ORIGINAL VS BOX-COX\n")
 cat(strrep("=", 65), "\n")
 
-sp_validos <- train$SalePrice[!is.na(train$SalePrice)]
-test_lillie <- nortest::lillie.test(sp_validos)
-print(test_lillie)
-cat(sprintf("\nComo el p-valor (%.4e) es menor a 0.05, rechazamos H0.\n", test_lillie$p.value))
-cat("SalePrice NO sigue una distribución normal, por lo que usaremos correlación de Spearman.\n\n")
+# Evaluación visual: QQ-Plots con bandas de confianza de la librería 'car'
+par(mfrow = c(1, 2))
+car::qqPlot(train$SalePrice, pch = 19, col = "#D7191C",
+            main = "QQ-Plot: SalePrice Original",
+            xlab = "Cuantiles teóricos", ylab = "Cuantiles muestrales")
+
+car::qqPlot(train$SalePrice_BC, pch = 19, col = "#2C7BB6",
+            main = paste0("QQ-Plot: SalePrice (Box-Cox, λ=", round(lambda_opt,2), ")"),
+            xlab = "Cuantiles teóricos", ylab = "Cuantiles muestrales")
+par(mfrow = c(1, 1)) # Restaurar panel gráfico
+
+# Evaluación analítica: Test de Lilliefors sobre la variable original vs transformada
+precio_valido <- train$SalePrice[!is.na(train$SalePrice)]
+precio_bc_valido <- train$SalePrice_BC[!is.na(train$SalePrice_BC)]
+
+test_orig <- nortest::lillie.test(precio_valido)
+test_bc <- nortest::lillie.test(precio_bc_valido)
+
+cat(sprintf("Test Lilliefors (Original) : p-valor = %.4e\n", test_orig$p.value))
+cat(sprintf("Test Lilliefors (Box-Cox)  : p-valor = %.4e\n", test_bc$p.value))
+
+cat("\nLa transformación de Box-Cox centra los cuantiles muestrales sobre la línea teórica,\n")
+cat("corrigiendo la asimetría de forma mucho más rigurosa que el logaritmo estándar.\n\n")
 
 
 # ------------------------------------------------------------------
@@ -416,20 +489,20 @@ p_sp1 <- ggplot(train, aes(x = SalePrice)) +
     x = "Precio de venta (USD)", y = "Densidad"
   ) + theme_hp
 
-p_sp2 <- ggplot(train, aes(x = logSalePrice)) +
+p_sp2 <- ggplot(train, aes(x = SalePrice_BC)) +
   geom_histogram(aes(y = after_stat(density)), bins = 50,
                  fill = "#1A9641", alpha = 0.75, color = "white") +
   geom_density(color = "#D7191C", linewidth = 1.1) +
   labs(
-    title    = "Distribución de log(SalePrice)",
-    subtitle = sprintf("La transformación logarítmica normaliza la distribución  |  Asimetría = %.2f  |  Curtosis = %.2f",
-                       skewness(train$logSalePrice),
-                       kurtosis(train$logSalePrice)),
-    x = "log(Precio de venta)", y = "Densidad"
+    title    = sprintf("Distribución de SalePrice (Box-Cox, λ = %.2f)", lambda_opt),
+    subtitle = sprintf("Transformación óptima por MLE | Asimetría = %.2f | Curtosis = %.2f",
+                       skewness(train$SalePrice_BC),
+                       kurtosis(train$SalePrice_BC)),
+    x = "SalePrice transformado (Box-Cox)", y = "Densidad"
   ) + theme_hp
 
 grid.arrange(p_sp1, p_sp2, ncol = 2,
-             top = "Variable respuesta: SalePrice y su transformación logarítmica")
+             top = "Variable respuesta: SalePrice original y transformación Box-Cox óptima")
 
 
 # ------------------------------------------------------------------
@@ -443,7 +516,7 @@ num_vars_key <- c(
 )
 
 stats_tbl <- train %>%
-  select(all_of(num_vars_key)) %>%
+  dplyr::select(all_of(num_vars_key)) %>%  # <-- Solo se añade dplyr:: aquí
   pivot_longer(everything(), names_to = "Variable", values_to = "Valor") %>%
   group_by(Variable) %>%
   summarise(
@@ -463,6 +536,7 @@ stats_tbl <- train %>%
 
 cat("\nTabla de estadísticos descriptivos — variables numéricas clave:\n")
 print(stats_tbl, n = Inf)
+
 
 
 # ------------------------------------------------------------------
@@ -722,7 +796,7 @@ cor_vars <- c(
 
 train_cor <- train %>%
   mutate(OverallQual_n = as.numeric(OverallQual)) %>%
-  select(all_of(cor_vars))
+  dplyr::select(all_of(cor_vars))
 
 cor_mat <- cor(train_cor, use = "pairwise.complete.obs", method = "spearman")
 
