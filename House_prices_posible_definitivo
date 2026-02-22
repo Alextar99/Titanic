@@ -242,36 +242,6 @@ if (n_na_restantes > 0) {
 }
 
 
-# --- PASO 5.5: Detección de Inconsistencias Lógicas (editrules) ---
-# Se ejecuta DESPUÉS de la imputación para no contaminar con NAs
-cat("\n--- Verificación de Reglas Lógicas (post-imputación) ---\n")
-reglas_vivienda <- editset(c(
-  "SalePrice > 0",
-  "LotArea > 0",
-  "TotalBsmtSF >= 0",
-  "GrLivArea >= FlrSF_1st",
-  "YearBuilt <= YrSold"
-))
-
-train_num_check <- train %>%
-  mutate(YrSold = as.integer(as.character(YrSold))) %>%  
-  dplyr::select(SalePrice, LotArea, TotalBsmtSF, GrLivArea, FlrSF_1st, YearBuilt, YrSold) 
-
-
-violaciones <- violatedEdits(reglas_vivienda, train_num_check)
-
-print(summary(violaciones))
-
-# Solo generar el gráfico si se detecta al menos 1 violación lógica
-if (sum(violaciones, na.rm = TRUE) > 0) {
-  # IMPORTANTE: Se quita el argumento 'main' porque editrules genera el suyo propio
-  plot(violaciones)
-} else {
-  cat("\n✓ Datos lógicamente consistentes: No se detectaron violaciones de edición.\n")
-  cat("  (Se omite el gráfico de frecuencias de error).\n")
-}
-
-
 
 # ==============================================================
 # a.4) TRATAMIENTO DE OUTLIERS E IMPUTACIÓN k-NN
@@ -280,11 +250,8 @@ if (sum(violaciones, na.rm = TRUE) > 0) {
 # 1. Detección: Hubert, M. y Vandervieren, E. (2008) - Boxplot ajustado (Medcouple).
 # 2. Imputación: VIM::kNN - Agregación k-Nearest Neighbors con distancia de Gower.
 
-out_vars <- c(
-  "SalePrice", "GrLivArea", "LotArea", "LotFrontage",
-  "TotalSF", "TotalBsmtSF","GarageArea", "TotalBaths",
-  "HouseAge", "QualSF"
-)
+
+out_vars <- c("GrLivArea", "LotArea", "LotFrontage", "TotalBsmtSF", "GarageArea", "HouseAge")
 
 # Guardamos una copia del dataset original para la comparativa visual posterior
 train_pre_outliers <- train
@@ -356,7 +323,15 @@ cat("La imputación usa la distancia de Gower, preservando las relaciones multiv
 
 # Se imputan los NAs usando la mediana de los 5 vecinos más parecidos
 # imp_var = FALSE evita que se creen columnas booleanas innecesarias en el dataset
+
 train <- VIM::kNN(train, variable = out_vars, k = 5, imp_var = FALSE)
+
+# NUEVO: Sincronización post-imputación
+train <- train %>%
+  mutate(
+    TotalSF = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
+    QualSF  = as.integer(OverallQual) * TotalSF
+  )
 
 
 # --- Visualización comparativa Antes vs Después ---------------
@@ -411,6 +386,39 @@ train <- dummy_cols(train,
                     remove_first_dummy = TRUE, 
                     remove_selected_columns = FALSE) # Se conservan para el EDA
 cat("Variables dummy de Neighborhood, BldgType y SaleCondition creadas exitosamente.\n")
+
+
+
+# --- PASO 9: Detección de Inconsistencias Lógicas (editrules) ---
+# Se ejecuta DESPUÉS de la imputación para no contaminar con NAs
+cat("\n--- Verificación de Reglas Lógicas (post-imputación) ---\n")
+reglas_vivienda <- editset(c(
+  "SalePrice > 0",
+  "LotArea > 0",
+  "TotalBsmtSF >= 0",
+  "GrLivArea >= FlrSF_1st",
+  "YearBuilt <= YrSold"
+))
+
+train_num_check <- train %>%
+  mutate(YrSold = as.integer(as.character(YrSold))) %>%  
+  dplyr::select(SalePrice, LotArea, TotalBsmtSF, GrLivArea, FlrSF_1st, YearBuilt, YrSold) 
+
+
+violaciones <- violatedEdits(reglas_vivienda, train_num_check)
+
+print(summary(violaciones))
+
+# Solo generar el gráfico si se detecta al menos 1 violación lógica
+if (sum(violaciones, na.rm = TRUE) > 0) {
+  # IMPORTANTE: Se quita el argumento 'main' porque editrules genera el suyo propio
+  plot(violaciones)
+} else {
+  cat("\n✓ Datos lógicamente consistentes: No se detectaron violaciones de edición.\n")
+  cat("  (Se omite el gráfico de frecuencias de error).\n")
+}
+
+
 
 
 # --------------------------------------------------------------
