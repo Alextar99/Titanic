@@ -1,0 +1,607 @@
+########################################################
+# ANÁLISIS DE PRECIOS DE CASAS - KAGGLE
+# Dataset: House Prices - Advanced Regression Techniques
+# Enlace: https://www.kaggle.com/competitions/
+#         house-prices-advanced-regression-techniques
+# Alumno/a: [TU NOMBRE AQUÍ]
+########################################################
+# ESTRUCTURA (según instrucciones de la profesora):
+#   1. Preparación de los datos:
+#      - Describir el conjunto (nº variables, nº individuos, nombre, enlace)
+#      - Transformar, limpiar e imputar
+#      - Resumen final del conjunto
+#   2. Análisis exploratorio (EDA)
+########################################################
+
+
+# ============================================================
+# PARTE 0: PAQUETES
+# ============================================================
+rm(list = ls())
+graphics.off()
+
+paquetes <- c("dplyr", "ggplot2", "plotly", "skimr",
+              "naniar", "scales", "corrplot", "tidyr",
+              "moments", "gridExtra", "nortest")
+
+instalar <- paquetes[!paquetes %in% installed.packages()[, "Package"]]
+if (length(instalar) > 0) install.packages(instalar)
+
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(skimr)
+library(naniar)
+library(scales)
+library(corrplot)
+library(tidyr)
+library(moments)
+library(gridExtra)
+library(nortest)
+
+# Tema visual consistente para todos los gráficos
+mi_tema <- theme_minimal() +
+  theme(
+    plot.title    = element_text(hjust = 0.5, face = "bold", size = 13),
+    plot.subtitle = element_text(hjust = 0.5, color = "grey50", size = 10),
+    axis.title    = element_text(size = 10)
+  )
+
+
+# ============================================================
+# PARTE 1: DESCRIPCIÓN DEL CONJUNTO DE DATOS
+# ============================================================
+cat("==============================================\n")
+cat("   DESCRIPCIÓN DEL CONJUNTO DE DATOS\n")
+cat("==============================================\n\n")
+
+# IMPORTANTE: Descarga train.csv de Kaggle y ponlo en tu carpeta de trabajo
+# Enlace: https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/data
+casas_raw <- read.csv("train.csv", stringsAsFactors = FALSE)
+casas     <- casas_raw   # copia de trabajo — casas_raw queda siempre intacto
+
+cat("Nombre del conjunto: House Prices - Advanced Regression Techniques\n")
+cat("Fuente: Kaggle Competition\n")
+cat("Enlace: https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques\n")
+cat("Descripción: Datos de ventas de casas en Ames, Iowa (EE.UU.) — 2006-2010\n")
+cat("Objetivo: Predecir el precio de venta (SalePrice) a partir de 79 características\n\n")
+
+cat("── Dimensiones del conjunto ORIGINAL ──────\n")
+cat("  Número de individuos (casas):      ", nrow(casas), "\n")
+cat("  Número de variables (características):", ncol(casas), "\n")
+cat("  Variables numéricas:               ", sum(sapply(casas, is.numeric)), "\n")
+cat("  Variables de texto:                ", sum(sapply(casas, is.character)), "\n\n")
+
+cat("── Primeras 10 variables ────────────────────\n")
+print(names(casas)[1:10])
+cat("... y", ncol(casas) - 10, "variables más\n\n")
+
+cat("── Primeras 5 filas (primeras 10 columnas) ──\n")
+print(head(casas[, 1:10], 5))
+
+cat("\n── Resumen estadístico INICIAL ─────────────\n")
+print(summary(casas[, 1:5]))
+
+
+# ============================================================
+# PARTE 2: TRANSFORMAR, LIMPIAR E IMPUTAR
+# ============================================================
+cat("\n==============================================\n")
+cat("   TRANSFORMACIÓN, LIMPIEZA E IMPUTACIÓN\n")
+cat("==============================================\n\n")
+
+
+# ── PASO 1: Diagnóstico de valores perdidos ───────────────────
+cat("── NAs por variable ANTES de limpiar:\n")
+nas_antes <- colSums(is.na(casas))
+nas_antes <- nas_antes[nas_antes > 0]
+
+nas_df <- data.frame(
+  Variable   = names(nas_antes),
+  NAs        = as.numeric(nas_antes),
+  Porcentaje = round(as.numeric(nas_antes) / nrow(casas) * 100, 1)
+)
+nas_df <- nas_df[order(-nas_df$NAs), ]
+print(nas_df)
+
+# Visualización de NAs
+p_miss <- gg_miss_var(casas, show_pct = TRUE) +
+  labs(title    = "Porcentaje de valores faltantes por variable",
+       subtitle = paste0("House Prices — Kaggle (n = ", nrow(casas),
+                         " obs., ", ncol(casas), " vars.)"),
+       y = "% Missing") +
+  mi_tema
+print(p_miss)
+
+
+# ── PASO 2: Identificar tipos de variables ────────────────────
+cat("\n── Identificando tipos de variables...\n")
+
+vars_numericas <- c("LotFrontage", "LotArea", "MasVnrArea", "BsmtFinSF1",
+                    "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF",
+                    "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "GarageArea",
+                    "WoodDeckSF", "OpenPorchSF", "EnclosedPorch",
+                    "X3SsnPorch", "ScreenPorch", "PoolArea", "MiscVal", "SalePrice")
+
+vars_ordinales <- c("ExterQual", "ExterCond", "BsmtQual", "BsmtCond",
+                    "HeatingQC", "KitchenQual", "FireplaceQu", "GarageQual",
+                    "GarageCond", "PoolQC", "Fence")
+
+vars_nominales <- c("MSZoning", "Street", "Alley", "LotShape", "LandContour",
+                    "Utilities", "LotConfig", "LandSlope", "Neighborhood",
+                    "Condition1", "Condition2", "BldgType", "HouseStyle",
+                    "RoofStyle", "RoofMatl", "Exterior1st", "Exterior2nd",
+                    "MasVnrType", "Foundation", "BsmtExposure", "BsmtFinType1",
+                    "BsmtFinType2", "Heating", "CentralAir", "Electrical",
+                    "Functional", "GarageType", "GarageFinish", "PavedDrive",
+                    "MiscFeature", "SaleType", "SaleCondition")
+
+cat("  Variables numéricas continuas:", length(vars_numericas), "\n")
+cat("  Variables ordinales (con orden):", length(vars_ordinales), "\n")
+cat("  Variables nominales (sin orden):", length(vars_nominales), "\n")
+
+
+# ── PASO 3: Estrategia según % de NAs ────────────────────────
+cat("\n── Decisiones sobre variables con NAs:\n")
+
+# >80% NAs → ELIMINAR: con tan pocos datos reales imputar
+# introduce más ruido que información útil
+vars_eliminar <- names(nas_antes[nas_antes > 0.8 * nrow(casas)])
+if (length(vars_eliminar) > 0) {
+  cat("  Variables con >80% NAs (ELIMINAR):",
+      paste(vars_eliminar, collapse = ", "), "\n")
+  casas <- casas %>% select(-all_of(vars_eliminar))
+}
+
+# 50-80% NAs → VARIABLE BINARIA (tiene/no tiene la característica)
+vars_binarias <- names(nas_antes[nas_antes > 0.5 * nrow(casas) &
+                                   nas_antes <= 0.8 * nrow(casas)])
+if (length(vars_binarias) > 0) {
+  cat("  Variables con 50-80% NAs (BINARIA):",
+      paste(vars_binarias, collapse = ", "), "\n")
+  for (var in vars_binarias) {
+    casas[[paste0("Tiene_", var)]] <- factor(
+      ifelse(is.na(casas[[var]]), "No", "Sí")
+    )
+  }
+}
+
+cat("  Variables con <50% NAs: se imputarán según su tipo\n")
+
+
+# ── PASO 4: Imputación específica por tipo ────────────────────
+cat("\n── Imputando variables según su tipo:\n")
+
+# 4.1) Categóricas donde NA = "no tiene esa característica"
+#      Confirmado en el data_description.txt de Kaggle
+vars_na_none <- c("Alley", "BsmtQual", "BsmtCond", "BsmtExposure",
+                  "BsmtFinType1", "BsmtFinType2", "FireplaceQu",
+                  "GarageType", "GarageFinish", "GarageQual", "GarageCond",
+                  "PoolQC", "Fence", "MiscFeature")
+
+for (var in vars_na_none) {
+  if (var %in% names(casas)) {
+    casas[[var]][is.na(casas[[var]])] <- "None"
+    cat("  ", var, ": NAs → 'None' (sin esa característica)\n")
+  }
+}
+
+# 4.2) Categóricas con pocos NAs → MODA
+vars_cat_moda <- c("MSZoning", "Utilities", "Exterior1st", "Exterior2nd",
+                   "MasVnrType", "Electrical", "KitchenQual",
+                   "Functional", "SaleType")
+
+for (var in vars_cat_moda) {
+  if (var %in% names(casas) && sum(is.na(casas[[var]])) > 0) {
+    moda <- names(sort(table(casas[[var]]), decreasing = TRUE))[1]
+    casas[[var]][is.na(casas[[var]])] <- moda
+    cat("  ", var, ": imputado con moda = '", moda, "'\n", sep = "")
+  }
+}
+
+# 4.3) Numéricas donde NA = 0 (área de algo que no existe = 0 m²)
+vars_num_cero <- c("MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF",
+                   "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath",
+                   "GarageYrBlt", "GarageCars", "GarageArea")
+
+for (var in vars_num_cero) {
+  if (var %in% names(casas) && sum(is.na(casas[[var]])) > 0) {
+    casas[[var]][is.na(casas[[var]])] <- 0
+    cat("  ", var, ": NAs → 0 (no tiene esa área/característica)\n")
+  }
+}
+
+# 4.4) LotFrontage (~18% NAs): dato realmente perdido
+#      Se imputa con la mediana del propio barrio: parcelas del mismo
+#      Neighborhood tienden a ser similares → mejor estimación que la media global
+casas <- casas %>%
+  group_by(Neighborhood) %>%
+  mutate(LotFrontage = ifelse(
+    is.na(LotFrontage),
+    median(LotFrontage, na.rm = TRUE),
+    LotFrontage
+  )) %>%
+  ungroup()
+cat("  LotFrontage: NAs → mediana del barrio\n")
+
+
+# ── PASO 5: Convertir variables a su tipo correcto ────────────
+cat("\n── Convirtiendo variables a factores...\n")
+
+# Ordinales: escala de calidad con jerarquía clara Po < Fa < TA < Gd < Ex
+# "None" es el primer nivel para casas sin esa característica
+niveles_calidad <- c("None", "Po", "Fa", "TA", "Gd", "Ex")
+vars_ord_calidad <- c("ExterQual", "ExterCond", "BsmtQual", "BsmtCond",
+                      "HeatingQC", "KitchenQual", "FireplaceQu",
+                      "GarageQual", "GarageCond")
+
+for (var in vars_ord_calidad) {
+  if (var %in% names(casas)) {
+    casas[[var]] <- factor(casas[[var]],
+                           levels  = niveles_calidad,
+                           ordered = TRUE)
+    cat("  ", var, "→ factor ordinal (None < Po < Fa < TA < Gd < Ex)\n")
+  }
+}
+
+# Nominales importantes
+for (var in c("MSZoning", "Neighborhood", "BldgType",
+              "HouseStyle", "SaleCondition")) {
+  if (var %in% names(casas)) {
+    casas[[var]] <- as.factor(casas[[var]])
+  }
+}
+cat("  Variables nominales clave → factores\n")
+
+
+# ── PASO 6: Detección y tratamiento de outliers ───────────────
+cat("\n── Detección de outliers (método Tukey, 1.5 IQR):\n")
+
+vars_check <- c("LotArea", "GrLivArea", "TotalBsmtSF", "GarageArea", "SalePrice")
+
+for (var in vars_check) {
+  if (var %in% names(casas)) {
+    x     <- casas[[var]]
+    Q1    <- quantile(x, 0.25, na.rm = TRUE)
+    Q3    <- quantile(x, 0.75, na.rm = TRUE)
+    IQR_v <- Q3 - Q1
+    n_out <- sum(x < (Q1 - 1.5*IQR_v) | x > (Q3 + 1.5*IQR_v), na.rm = TRUE)
+    cat(sprintf("  %s: %d outliers detectados (%.1f%%)\n",
+                var, n_out, 100 * n_out / sum(!is.na(x))))
+  }
+}
+
+# Visualización: boxplots para ver la distribución de cada variable
+plots_box <- lapply(vars_check, function(var) {
+  if (!var %in% names(casas)) return(NULL)
+  Q1    <- quantile(casas[[var]], 0.25, na.rm = TRUE)
+  Q3    <- quantile(casas[[var]], 0.75, na.rm = TRUE)
+  n_out <- sum(casas[[var]] < Q1 - 1.5*(Q3-Q1) |
+               casas[[var]] > Q3 + 1.5*(Q3-Q1), na.rm = TRUE)
+  ggplot(casas, aes(x = "", y = .data[[var]])) +
+    geom_boxplot(fill = "steelblue", alpha = 0.7,
+                 outlier.color = "red", outlier.alpha = 0.5) +
+    scale_y_continuous(labels = label_comma()) +
+    labs(title = var, subtitle = paste("Out:", n_out), x = NULL, y = NULL) +
+    mi_tema +
+    theme(plot.subtitle = element_text(color = "red", hjust = 0.5))
+})
+plots_box <- Filter(Negate(is.null), plots_box)
+do.call(grid.arrange, c(plots_box,
+                        list(ncol = 5,
+                             top  = "Outliers detectados por Tukey 1.5×IQR (en rojo)")))
+
+# Winsorización [P1%, P99%]: sustituye los extremos por el cuantil de corte
+# Conserva TODAS las observaciones — ninguna casa se elimina
+# Se aplica a las variables con mayor asimetría (no a SalePrice: sus valores
+# altos son legítimos y SalePrice_log ya reduce su influencia)
+winsorizar <- function(x, lo = 0.01, hi = 0.99) {
+  pmin(pmax(x, quantile(x, lo, na.rm = TRUE)),
+              quantile(x, hi, na.rm = TRUE))
+}
+
+vars_wins  <- c("LotArea", "GrLivArea", "TotalBsmtSF", "GarageArea")
+casas_orig <- casas   # copia para la verificación visual
+
+for (var in vars_wins) {
+  if (var %in% names(casas)) casas[[var]] <- winsorizar(casas[[var]])
+}
+
+cat("\n── Efecto de la winsorización [P1%, P99%]:\n")
+comp_wins <- do.call(rbind, lapply(vars_wins, function(var) {
+  data.frame(
+    Variable     = var,
+    Max_antes    = round(max(casas_orig[[var]], na.rm = TRUE)),
+    Max_despues  = round(max(casas[[var]],      na.rm = TRUE)),
+    Asim_antes   = round(moments::skewness(casas_orig[[var]], na.rm = TRUE), 2),
+    Asim_despues = round(moments::skewness(casas[[var]],      na.rm = TRUE), 2)
+  )
+}))
+print(comp_wins, row.names = FALSE)
+cat(sprintf("Observaciones conservadas: %d (ninguna eliminada)\n", nrow(casas)))
+
+
+# ── PASO 7: Transformaciones logarítmicas ────────────────────
+cat("\n── Aplicando transformaciones logarítmicas:\n")
+cat("  Las variables muy asimétricas se benefician del logaritmo:\n")
+cat("  reduce el efecto de los valores extremos y acerca la distribución a la normalidad\n\n")
+
+# log(x+1) en lugar de log(x) para evitar log(0) = -Inf
+vars_log <- c("LotArea", "GrLivArea", "TotalBsmtSF", "X1stFlrSF", "SalePrice")
+
+for (var in vars_log) {
+  if (var %in% names(casas)) {
+    casas[[paste0(var, "_log")]] <- log(casas[[var]] + 1)
+    cat("  ", var, "→", paste0(var, "_log"), "\n")
+  }
+}
+
+
+# ── PASO 8: Variables derivadas ───────────────────────────────
+cat("\n── Creando variables derivadas:\n")
+
+# Total de baños: medios baños valen 0.5 (convención del sector inmobiliario)
+casas$TotalBaths <- casas$FullBath + 0.5 * casas$HalfBath +
+                   casas$BsmtFullBath + 0.5 * casas$BsmtHalfBath
+cat("  TotalBaths = FullBath + 0.5×HalfBath + BsmtFullBath + 0.5×BsmtHalfBath\n")
+
+# Superficie total sumando los tres niveles de la vivienda
+casas$TotalSF <- casas$TotalBsmtSF + casas$X1stFlrSF + casas$X2ndFlrSF
+cat("  TotalSF = TotalBsmtSF + X1stFlrSF + X2ndFlrSF\n")
+
+# Edad de la casa en el momento de la venta
+casas$HouseAge <- casas$YrSold - casas$YearBuilt
+cat("  HouseAge = YrSold - YearBuilt\n")
+
+# ¿Fue remodelada después de construirse?
+casas$Remodelada <- factor(
+  ifelse(casas$YearRemodAdd != casas$YearBuilt, "Sí", "No")
+)
+cat("  Remodelada = factor(YearRemodAdd != YearBuilt)\n")
+
+
+# ── PASO 9: Verificación final de NAs ────────────────────────
+cat("\n── NAs DESPUÉS de toda la limpieza:\n")
+nas_despues <- colSums(is.na(casas))
+nas_despues <- nas_despues[nas_despues > 0]
+if (length(nas_despues) == 0) {
+  cat("  ✅ No quedan NAs en el dataset\n")
+} else {
+  print(data.frame(Variable = names(nas_despues),
+                   NAs      = as.numeric(nas_despues)))
+}
+
+
+# ============================================================
+# PARTE 3: RESUMEN FINAL DEL CONJUNTO
+# ============================================================
+cat("\n==============================================\n")
+cat("         RESUMEN FINAL DEL CONJUNTO\n")
+cat("==============================================\n\n")
+
+cat("── Dimensiones finales:\n")
+cat("  Casas    :", nrow(casas), "\n")
+cat("  Variables:", ncol(casas), "\n")
+cat("  Numéricas:", sum(sapply(casas, is.numeric)), "\n")
+cat("  Factores :", sum(sapply(casas, is.factor)), "\n\n")
+
+cat("── Variables numéricas clave:\n")
+print(summary(casas[, c("SalePrice", "GrLivArea", "TotalSF",
+                         "TotalBaths", "GarageArea", "HouseAge")]))
+
+cat("\n── Variables categóricas clave:\n")
+cat("  Barrios únicos       :", length(unique(casas$Neighborhood)), "\n")
+cat("  Tipos de construcción:", length(unique(casas$BldgType)), "\n")
+
+cat("\n── Resumen completo (skimr — primeras 20 variables):\n")
+print(skim(casas[, 1:20]))
+
+
+# ============================================================
+# PARTE 4: ANÁLISIS EXPLORATORIO (EDA)
+# ============================================================
+cat("\n==============================================\n")
+cat("         ANÁLISIS EXPLORATORIO (EDA)\n")
+cat("==============================================\n\n")
+
+# --- Prueba de normalidad de SalePrice -----------------------
+# Antes de elegir el coeficiente de correlación comprobamos formalmente
+# si SalePrice sigue una distribución normal
+cat("── Prueba de normalidad (Lilliefors) sobre SalePrice:\n")
+test_lillie <- nortest::lillie.test(casas$SalePrice)
+print(test_lillie)
+cat(sprintf(
+  "\nComo el p-valor (%.2e) < 0.05, rechazamos la normalidad.\n",
+  test_lillie$p.value
+))
+cat("→ Usaremos la correlación de Spearman (robusta a no-normalidad)\n\n")
+
+
+# --- Gráfico 1: Distribución del precio ----------------------
+g1 <- ggplot(casas, aes(x = SalePrice)) +
+  geom_histogram(bins = 50, fill = "steelblue",
+                 color = "white", alpha = 0.85) +
+  scale_x_continuous(labels = dollar) +
+  labs(title    = "Distribución del Precio de Venta",
+       subtitle = sprintf(
+         "Media = %s  |  Mediana = %s  |  Asimetría = %.2f",
+         dollar(round(mean(casas$SalePrice))),
+         dollar(median(casas$SalePrice)),
+         moments::skewness(casas$SalePrice)
+       ),
+       x = "Precio ($)", y = "Frecuencia") +
+  mi_tema
+print(g1)
+
+
+# --- Gráfico 2: Precio vs Área habitable ---------------------
+g2 <- ggplot(casas, aes(x = GrLivArea, y = SalePrice)) +
+  geom_point(alpha = 0.35, color = "darkgreen", size = 1.5) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = dollar) +
+  labs(title    = "Precio vs Área Habitable (GrLivArea)",
+       subtitle = sprintf(
+         "Correlación de Spearman: rho = %.3f",
+         cor(casas$SalePrice, casas$GrLivArea, method = "spearman")
+       ),
+       x = "Área habitable (sq ft)", y = "Precio ($)") +
+  mi_tema
+print(g2)
+
+
+# --- Gráfico 3: Precio mediano por barrio (todos) ------------
+g3 <- casas %>%
+  group_by(Neighborhood) %>%
+  summarise(MedianPrice = median(SalePrice), n = n(), .groups = "drop") %>%
+  mutate(Neighborhood = reorder(Neighborhood, MedianPrice)) %>%
+  ggplot(aes(x = Neighborhood, y = MedianPrice, fill = MedianPrice)) +
+  geom_col() +
+  geom_text(aes(label = paste0("n=", n)),
+            hjust = -0.1, size = 2.5, color = "grey30") +
+  scale_y_continuous(labels = dollar,
+                     expand = expansion(mult = c(0, 0.18))) +
+  scale_fill_gradient(low = "steelblue", high = "coral",
+                      labels = dollar, name = "Precio\nmediano") +
+  coord_flip() +
+  labs(title    = "Precio mediano de venta por Barrio",
+       subtitle = "Todos los barrios, ordenados de menor a mayor",
+       x = NULL, y = "Precio mediano ($)") +
+  mi_tema
+print(g3)
+
+
+# --- Gráfico 4: Precio por Calidad de la Cocina --------------
+if ("KitchenQual" %in% names(casas)) {
+  g4 <- ggplot(casas, aes(x = KitchenQual, y = SalePrice,
+                           fill = KitchenQual)) +
+    geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+    scale_y_continuous(labels = dollar) +
+    labs(title    = "Precio según Calidad de la Cocina",
+         subtitle = "Escala ordinal: None < Po < Fa < TA < Gd < Ex",
+         x = "Calidad", y = "Precio ($)") +
+    mi_tema + theme(legend.position = "none")
+  print(g4)
+}
+
+
+# --- Gráfico 5: Precio vs Antigüedad de la vivienda ----------
+g5 <- ggplot(casas, aes(x = HouseAge, y = SalePrice)) +
+  geom_point(alpha = 0.3, color = "steelblue", size = 1.2) +
+  geom_smooth(method = "loess", color = "red",
+              se = TRUE, linetype = "dashed") +
+  scale_y_continuous(labels = dollar) +
+  labs(title    = "Precio de venta vs Antigüedad de la vivienda",
+       subtitle = sprintf(
+         "Correlación de Spearman: rho = %.3f",
+         cor(casas$SalePrice, casas$HouseAge,
+             use = "pairwise.complete.obs", method = "spearman")
+       ),
+       x = "Antigüedad (años)", y = "Precio ($)") +
+  mi_tema
+print(g5)
+
+
+# --- Matriz de correlaciones de Spearman ---------------------
+# Usamos Spearman porque SalePrice no es normal (test de Lilliefors)
+cat("\n── Matriz de correlaciones (Spearman):\n")
+vars_cor <- c("SalePrice", "GrLivArea", "TotalSF", "TotalBaths",
+              "GarageArea", "TotalBsmtSF", "HouseAge",
+              "OverallQual", "OverallCond")
+vars_cor <- vars_cor[vars_cor %in% names(casas)]
+
+matriz_cor <- cor(casas[, vars_cor],
+                  use    = "pairwise.complete.obs",
+                  method = "spearman")
+print(round(matriz_cor, 2))
+
+corrplot(matriz_cor,
+         method      = "color",
+         type        = "upper",
+         order       = "hclust",
+         tl.cex      = 0.8,
+         addCoef.col = "black",
+         number.cex  = 0.65,
+         col         = colorRampPalette(c("#D7191C", "white", "#2C7BB6"))(200),
+         title       = "Correlaciones de Spearman con SalePrice",
+         mar         = c(0, 0, 1, 0))
+
+
+# ============================================================
+# PARTE 5: GRÁFICO INTERACTIVO
+# ============================================================
+cat("\n── Gráfico interactivo (muestra de 500 casas):\n")
+
+datos_plot <- casas %>%
+  sample_n(min(500, nrow(casas))) %>%
+  select(SalePrice, GrLivArea, Neighborhood,
+         YearBuilt, OverallQual, TotalBaths)
+
+grafico_interactivo <- plot_ly(
+  data      = datos_plot,
+  x         = ~GrLivArea,
+  y         = ~SalePrice,
+  color     = ~factor(OverallQual),
+  size      = ~TotalBaths,
+  type      = "scatter",
+  mode      = "markers",
+  marker    = list(opacity = 0.7, sizeref = 0.1),
+  text      = ~paste0(
+    "<b>Precio: $", format(SalePrice, big.mark = ","), "</b><br>",
+    "Área: ",        format(GrLivArea, big.mark = ","), " sq ft<br>",
+    "Barrio: ",      Neighborhood, "<br>",
+    "Año construido: ", YearBuilt, "<br>",
+    "Calidad: ",     OverallQual, "/10<br>",
+    "Baños: ",       round(TotalBaths, 1)
+  ),
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = list(
+      text = "<b>Exploración Interactiva: Precios de Casas</b><br><sub>Pasa el ratón para ver detalles</sub>",
+      font = list(size = 15)
+    ),
+    xaxis  = list(title = "<b>Área Habitable (sq ft)</b>"),
+    yaxis  = list(title = "<b>Precio de Venta ($)</b>"),
+    legend = list(title = list(text = "<b>Calidad</b>"))
+  )
+
+print(grafico_interactivo)
+
+
+# ============================================================
+# RESUMEN FINAL PARA LA PRESENTACIÓN
+# ============================================================
+cat("\n")
+cat("═══════════════════════════════════════════════\n")
+cat("  SCRIPT COMPLETADO — RESUMEN PARA PRESENTAR\n")
+cat("═══════════════════════════════════════════════\n")
+cat("\n1. DESCRIPCIÓN:\n")
+cat("   Dataset: House Prices (Kaggle) — Ames, Iowa 2006-2010\n")
+cat("   Casas:", nrow(casas), "| Variables:", ncol(casas), "\n\n")
+
+cat("2. LIMPIEZA REALIZADA:\n")
+cat("   ✓ Variables >80% NAs: eliminadas\n")
+cat("   ✓ Variables 50-80% NAs: convertidas a binarias\n")
+cat("   ✓ Categóricas (NA = sin característica): → 'None'\n")
+cat("   ✓ Categóricas con pocos NAs: → moda\n")
+cat("   ✓ Numéricas (NA = sin área): → 0\n")
+cat("   ✓ LotFrontage: → mediana del barrio\n")
+cat("   ✓ Factores ordinales (escala calidad) y nominales\n\n")
+
+cat("3. OUTLIERS:\n")
+cat("   ✓ Detectados con Tukey 1.5×IQR\n")
+cat("   ✓ Winsorización [P1%, P99%]: LotArea, GrLivArea, TotalBsmtSF, GarageArea\n")
+cat("   ✓ Ninguna observación eliminada\n\n")
+
+cat("4. VARIABLES DERIVADAS:\n")
+cat("   ✓ TotalBaths, TotalSF, HouseAge, Remodelada\n")
+cat("   ✓ Variables log: LotArea, GrLivArea, TotalBsmtSF, X1stFlrSF, SalePrice\n\n")
+
+cat("5. EDA:\n")
+cat("   ✓ Test Lilliefors → Spearman justificado formalmente\n")
+cat("   ✓ 5 gráficos + matriz de correlación + gráfico interactivo\n\n")
+
+cat("6. RESULTADO:\n")
+cat("   ✓ Dataset sin NAs, listo para análisis\n")
+cat("═══════════════════════════════════════════════\n")
