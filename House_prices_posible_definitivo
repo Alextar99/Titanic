@@ -389,7 +389,8 @@ cat("Variables dummy de Neighborhood, BldgType y SaleCondition creadas exitosame
 
 
 
-# --- PASO 9: Detección de Inconsistencias Lógicas (editrules) ---
+
+# --- PASO 10: Detección de Inconsistencias Lógicas (editrules) ---
 # Se ejecuta DESPUÉS de la imputación para no contaminar con NAs
 cat("\n--- Verificación de Reglas Lógicas (post-imputación) ---\n")
 reglas_vivienda <- editset(c(
@@ -409,13 +410,42 @@ violaciones <- violatedEdits(reglas_vivienda, train_num_check)
 
 print(summary(violaciones))
 
-# Solo generar el gráfico si se detecta al menos 1 violación lógica
+
+# Comprobamos si hay alguna violación lógica
 if (sum(violaciones, na.rm = TRUE) > 0) {
-  # IMPORTANTE: Se quita el argumento 'main' porque editrules genera el suyo propio
-  plot(violaciones)
+  cat("\n¡Atención! Se han detectado inconsistencias lógicas. Procediendo a auto-corrección...\n")
+  
+  # PASO 10.1: Localización del error (Principio de Fellegi y Holt)
+  # localizeErrors devuelve una matriz lógica 'adapt' indicando qué celdas específicas modificar
+  errores_loc <- localizeErrors(reglas_vivienda, train_num_check, method = "mip")$adapt
+  cols_evaluadas <- colnames(errores_loc)
+  
+  # PASO 10.2: Anulación (Convertir a NA solo las celdas conflictivas)
+  for (col in cols_evaluadas) {
+    filas_con_error <- which(errores_loc[, col])
+    if (length(filas_con_error) > 0) {
+      train[[col]][filas_con_error] <- NA
+      cat(sprintf(" -> Anulado (NA) valor inconsistente en la columna '%s' (Fila: %s)\n", 
+                  col, paste(filas_con_error, collapse = ", ")))
+    }
+  }
+  
+  # PASO 10.3: Re-imputación (k-NN) de los nuevos NAs generados
+  # Se recalculan los valores basándose en los 5 vecinos más parecidos (distancia Gower)
+  cat(" -> Re-imputando valores lógicos mediante k-NN...\n")
+  train <- suppressWarnings(VIM::kNN(train, variable = cols_evaluadas, k = 5, imp_var = FALSE))
+  
+  # (Opcional) Sincronizamos las variables compuestas por si alguna se vio afectada
+  train <- train %>%
+    mutate(
+      TotalSF = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
+      QualSF  = as.integer(OverallQual) * TotalSF
+    )
+  
+  cat("✓ Inconsistencias corregidas exitosamente.\n")
+  
 } else {
   cat("\n✓ Datos lógicamente consistentes: No se detectaron violaciones de edición.\n")
-  cat("  (Se omite el gráfico de frecuencias de error).\n")
 }
 
 
