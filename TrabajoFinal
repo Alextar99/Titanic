@@ -1,0 +1,1484 @@
+# ==============================================================
+# ANÁLISIS COMPLETO: House Prices – Advanced Regression
+# Kaggle: house-prices-advanced-regression-techniques
+# URL   : https://www.kaggle.com/competitions/
+#         house-prices-advanced-regression-techniques
+#
+# ESTRUCTURA:
+#   a) Preparación de los datos 
+#   b) Análisis Exploratorio de Datos (EDA)
+#   c) Tablas de Contingencia y Medidas de Asociación
+#   d) Análisis de Componentes Principales (PCA)
+#   e) Análisis de Correspondencias (CA simple + MCA)
+#   f) Análisis Clúster (K-Means + Jerárquico)
+# ==============================================================
+
+
+# ==============================================================
+# 0. INSTALACIÓN Y CARGA DE LIBRERÍAS
+# ==============================================================
+rm(list = ls())
+graphics.off()
+
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+
+pacman::p_load(
+  # Núcleo EDA
+  tidyverse, skimr, naniar, corrplot,
+  plotly, scales, gridExtra, moments,
+  ggridges, viridis, ggrepel, nortest,
+  # Preprocesado
+  robustbase, VIM, editrules, MASS, car, dlookr, fastDummies,
+  # Tablas de contingencia y medidas de asociación
+  vcd, DescTools, rcompanion, psych, PerformanceAnalytics,
+  # Multivariante
+  FactoMineR, factoextra,
+  # Clúster
+  cluster, dendextend, RColorBrewer
+)
+
+
+# Tema gráfico personalizado (usado en toda la entrega)
+theme_hp <- theme_minimal(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13, hjust = 0),
+    plot.subtitle = element_text(color = "grey40", size = 10),
+    axis.title    = element_text(size = 10),
+    legend.title  = element_text(face = "bold", size = 9),
+    strip.text    = element_text(face = "bold")
+  )
+
+
+# ==============================================================
+# a) PREPARACIÓN DE LOS DATOS
+# ==============================================================
+
+# --------------------------------------------------------------
+# a.1) DESCRIPCIÓN DEL CONJUNTO ORIGINAL
+# --------------------------------------------------------------
+cat(strrep("=", 65), "\n")
+cat("NOMBRE   : House Prices – Advanced Regression Techniques\n")
+cat("FUENTE   : Kaggle\n")
+cat("ENLACE   : https://www.kaggle.com/competitions/\n")
+cat("           house-prices-advanced-regression-techniques\n")
+cat("CONTEXTO : Precios de venta de viviendas residenciales\n")
+cat("           en Ames, Iowa (EE.UU.) — años 2006-2010\n")
+cat(strrep("=", 65), "\n\n")
+
+# !! Ajusta la ruta a la ubicación de tu archivo train.csv !!
+train_raw <- read.csv(
+  "~/Análisis de Datos/Trabajo ADAT/House-prices/train.csv",
+  header = TRUE, stringsAsFactors = FALSE
+)
+
+n_obs  <- nrow(train_raw)
+n_vars <- ncol(train_raw)
+n_num  <- sum(sapply(train_raw, is.numeric))
+n_chr  <- sum(sapply(train_raw, is.character))
+
+cat(sprintf("Número de individuos (filas)     : %d\n",   n_obs))
+cat(sprintf("Número de variables (columnas)   : %d\n",   n_vars))
+cat(sprintf("  - Variables numéricas          : %d\n",   n_num))
+cat(sprintf("  - Variables de texto (categ.)  : %d\n\n", n_chr))
+
+cat("Variables del dataset:\n")
+print(names(train_raw))
+cat("\nPrimeras 5 filas (primeras 10 columnas):\n")
+print(head(train_raw[, 1:10], 5))
+
+
+# --------------------------------------------------------------
+# a.2) TRANSFORMACIÓN, LIMPIEZA E IMPUTACIÓN
+# --------------------------------------------------------------
+train <- train_raw  # copia de trabajo; train_raw queda intacto
+
+# Renombrar variables con nombres no sintácticos en R
+train <- train %>%
+  rename(FlrSF_1st  = X1stFlrSF,
+         FlrSF_2nd  = X2ndFlrSF,
+         Porch_3Ssn = X3SsnPorch)
+
+
+# --- PASO 1: Diagnóstico de valores perdidos ------------------
+miss_df <- data.frame(
+  Variable    = names(train),
+  N_Missing   = colSums(is.na(train)),
+  Pct_Missing = round(100 * colMeans(is.na(train)), 2)
+) %>%
+  filter(N_Missing > 0) %>%
+  arrange(desc(Pct_Missing))
+
+cat("\n--- Diagnóstico de valores perdidos (antes de imputar) ---\n")
+print(miss_df, row.names = FALSE)
+
+p_miss <- gg_miss_var(train, show_pct = TRUE) +
+  labs(
+    title    = "Porcentaje de valores faltantes por variable",
+    subtitle = sprintf("House Prices — Kaggle  (n = %d obs., %d vars.)", n_obs, n_vars),
+    y = "% Missing"
+  ) + theme_hp
+print(p_miss)
+
+
+# --- PASO 1.5: Eliminar variables con >80% de NAs -------------
+umbral_na  <- 80
+vars_insig <- miss_df$Variable[miss_df$Pct_Missing > umbral_na]
+cat(sprintf(
+  "\nVariables eliminadas por exceso de NAs (>%d%%): %s\n",
+  umbral_na, paste(vars_insig, collapse = ", ")
+))
+train <- train %>% dplyr::select(-all_of(vars_insig))
+
+
+# --- PASO 2: Imputación semántica (data dictionary) -----------
+na_none_cat <- intersect(
+  c("Alley","MasVnrType","BsmtQual","BsmtCond","BsmtExposure",
+    "BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType",
+    "GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature"),
+  names(train)
+)
+for (v in na_none_cat) train[[v]][is.na(train[[v]])] <- "None"
+
+na_zero_num <- c("MasVnrArea","BsmtFinSF1","BsmtFinSF2","BsmtUnfSF",
+                 "TotalBsmtSF","BsmtFullBath","BsmtHalfBath",
+                 "GarageCars","GarageArea","GarageYrBlt")
+for (v in na_zero_num) train[[v]][is.na(train[[v]])] <- 0
+
+train <- train %>%
+  group_by(Neighborhood) %>%
+  mutate(LotFrontage = if_else(
+    is.na(LotFrontage),
+    median(LotFrontage, na.rm = TRUE),
+    as.double(LotFrontage)
+  )) %>%
+  ungroup()
+
+moda_elec <- names(which.max(table(train$Electrical)))
+train$Electrical[is.na(train$Electrical)] <- moda_elec
+
+
+# --- PASO 3: Feature Engineering ------------------------------
+yr_num      <- as.integer(as.character(train$YrSold))
+precio_lim  <- train$SalePrice[!is.na(train$SalePrice) & train$SalePrice > 0]
+b_cox       <- boxcox(lm(precio_lim ~ 1), plotit = FALSE)
+lambda_opt  <- b_cox$x[which.max(b_cox$y)]
+cat(sprintf("\nLambda óptimo de Box-Cox para SalePrice: %.4f\n", lambda_opt))
+
+train <- train %>%
+  mutate(
+    SalePrice_BC  = (SalePrice^lambda_opt - 1) / lambda_opt,
+    HouseAge      = yr_num - YearBuilt,
+    RemodAge      = yr_num - YearRemodAdd,
+    TotalSF       = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
+    TotalBaths    = FullBath + 0.5*HalfBath + BsmtFullBath + 0.5*BsmtHalfBath,
+    HasPool       = factor(ifelse(PoolArea    > 0, "Sí", "No")),
+    HasGarage     = factor(ifelse(GarageArea  > 0, "Sí", "No")),
+    HasFireplace  = factor(ifelse(Fireplaces  > 0, "Sí", "No")),
+    HasBasement   = factor(ifelse(TotalBsmtSF > 0, "Sí", "No"))
+  ) %>%
+  mutate(
+    QualSF       = as.integer(OverallQual) * TotalSF,
+    TotalPorchSF = OpenPorchSF + EnclosedPorch + Porch_3Ssn + ScreenPorch
+  )
+
+new_feats <- c("QualSF","TotalSF","TotalBaths","TotalPorchSF",
+               "HouseAge","RemodAge","SalePrice","SalePrice_BC")
+cor_new <- cor(train %>% dplyr::select(all_of(new_feats)),
+               use = "pairwise.complete.obs")["SalePrice", ] %>%
+  sort(decreasing = TRUE)
+cat("\nCorrelación de las variables derivadas con SalePrice:\n")
+print(round(cor_new, 3))
+
+
+# --- PASO 4: Conversión de tipos --------------------------------
+train$MSSubClass <- factor(train$MSSubClass)
+train$OverallQual <- factor(train$OverallQual, levels = 1:10, ordered = TRUE)
+train$OverallCond <- factor(train$OverallCond, levels = 1:10, ordered = TRUE)
+train$MoSold      <- factor(train$MoSold, levels = 1:12, labels = month.abb)
+train$YrSold      <- factor(train$YrSold)
+
+quality_levels <- c("None","Po","Fa","TA","Gd","Ex")
+ord_qual_vars  <- c("ExterQual","ExterCond","BsmtQual","BsmtCond",
+                    "HeatingQC","KitchenQual","FireplaceQu","GarageQual","GarageCond")
+for (v in ord_qual_vars)
+  train[[v]] <- factor(train[[v]], levels = quality_levels, ordered = TRUE)
+
+chr_vars <- names(train)[sapply(train, is.character)]
+train[chr_vars] <- lapply(train[chr_vars], factor)
+
+
+# --- PASO 5: Verificación de valores perdidos -----------------
+n_na_rest <- sum(is.na(train))
+cat(sprintf("\nValores perdidos tras la imputación: %d\n", n_na_rest))
+if (n_na_rest > 0) {
+  cat("Variables con NAs restantes:\n")
+  print(names(which(colSums(is.na(train)) > 0)))
+}
+
+
+# ==============================================================
+# a.4) TRATAMIENTO DE OUTLIERS E IMPUTACIÓN k-NN
+# ==============================================================
+out_vars <- c("GrLivArea","LotArea","LotFrontage","TotalBsmtSF","GarageArea","HouseAge")
+train_pre_outliers <- train
+
+cat("\n", strrep("=", 65), "\n")
+cat("PASO 6 — DIAGNÓSTICO DE OUTLIERS (Hubert & Vandervieren)\n")
+cat(strrep("=", 65), "\n")
+
+# Justificación visual: LotFrontage por barrio
+train_frontage <- train %>%
+  group_by(Neighborhood) %>%
+  mutate(median_frontage = median(LotFrontage, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Neighborhood = fct_reorder(Neighborhood, median_frontage))
+
+p_frontage <- ggplot(train_frontage,
+                     aes(x = Neighborhood, y = LotFrontage, fill = Neighborhood)) +
+  geom_boxplot(outlier.alpha = 0.4, outlier.size = 1.2, width = 0.6) +
+  geom_hline(yintercept = median(train$LotFrontage, na.rm = TRUE),
+             color = "#D7191C", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = 3, y = median(train$LotFrontage, na.rm = TRUE) + 5,
+           label = "Mediana Global Ames", color = "#D7191C", fontface = "bold", size = 3.5) +
+  scale_y_continuous(breaks = seq(0, max(train$LotFrontage, na.rm = TRUE), by = 25)) +
+  scale_fill_viridis_d(option = "plasma") +
+  labs(
+    title    = "Distribución de LotFrontage por Barrio",
+    subtitle = "La variabilidad entre barrios justifica imputar con la mediana local",
+    x = "Barrio (Neighborhood)", y = "Fachada (pies lineales)"
+  ) + theme_hp + theme(legend.position = "none",
+                       axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"))
+print(p_frontage)
+
+# Justificación: Tukey vs Boxplot Ajustado
+options(mc_doScale_quiet = TRUE)
+sp_clean      <- train$SalePrice[!is.na(train$SalePrice)]
+lim_tukey_sup <- quantile(sp_clean, 0.75) + 1.5 * IQR(sp_clean)
+lim_adj_sup   <- robustbase::adjboxStats(sp_clean)$fence[2]
+
+p_justif <- ggplot(train, aes(x = SalePrice)) +
+  geom_density(fill = "#2C7BB6", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = lim_tukey_sup, color = "#D7191C", linetype = "dashed", linewidth = 1) +
+  geom_vline(xintercept = lim_adj_sup,   color = "#1A9641", linetype = "solid",  linewidth = 1) +
+  annotate("text", x = lim_tukey_sup, y = 0.000004,
+           label = "Límite Clásico (Tukey)",      color = "#D7191C", angle = 90, vjust = -0.5, size = 3.5, fontface = "bold") +
+  annotate("text", x = lim_adj_sup,   y = 0.000004,
+           label = "Límite Ajustado (Medcouple)", color = "#1A9641", angle = 90, vjust = -0.5, size = 3.5, fontface = "bold") +
+  scale_x_continuous(labels = label_dollar()) +
+  labs(
+    title    = "Justificación: Método Clásico vs Boxplot Ajustado por Asimetría",
+    subtitle = "Medcouple adapta el límite a la asimetría real (Hubert & Vandervieren)",
+    x = "Precio de Venta (USD)", y = "Densidad"
+  ) + theme_hp
+print(p_justif)
+
+# Detección y NAlización de outliers
+diag_out <- do.call(rbind, lapply(out_vars, function(v) {
+  x       <- train[[v]]
+  bx      <- robustbase::adjboxStats(x[!is.na(x)])
+  is_out  <- !is.na(x) & (x < bx$fence[1] | x > bx$fence[2])
+  n_out   <- sum(is_out)
+  train[[v]][is_out] <<- NA
+  data.frame(Variable = v,
+             Lim_Inf  = round(bx$fence[1], 1),
+             Lim_Sup  = round(bx$fence[2], 1),
+             N_out    = n_out,
+             Pct_out  = round(100 * n_out / sum(!is.na(x)), 1))
+})) %>% arrange(desc(Pct_out))
+print(diag_out, row.names = FALSE)
+
+
+# --- PASO 7: Imputación k-NN ----------------------------------
+cat("\nPASO 7 — Imputación k-NN (VIM, k = 5, distancia de Gower)\n")
+train <- VIM::kNN(train, variable = out_vars, k = 5, imp_var = FALSE)
+train <- train %>%
+  mutate(TotalSF = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
+         QualSF  = as.integer(OverallQual) * TotalSF)
+
+# Visualización comparativa Antes vs Después
+vars_plot <- c("SalePrice","GrLivArea","LotArea","TotalSF")
+df_comp <- bind_rows(
+  train_pre_outliers %>% dplyr::select(all_of(vars_plot)) %>% mutate(Fase = "1. Original"),
+  train              %>% dplyr::select(all_of(vars_plot)) %>% mutate(Fase = "2. Post-Imputación k-NN")
+) %>% pivot_longer(cols = -Fase, names_to = "Variable", values_to = "Valor")
+
+p_comp <- ggplot(df_comp, aes(x = Fase, y = Valor, fill = Fase)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.5, outlier.size = 1) +
+  facet_wrap(~Variable, scales = "free_y") +
+  scale_y_continuous(labels = label_comma()) +
+  scale_fill_manual(values = c("1. Original" = "#FC8D59", "2. Post-Imputación k-NN" = "#74ADD1")) +
+  labs(title    = "Efecto del tratamiento de outliers (Boxplot Ajustado + VIM::kNN)",
+       subtitle = "5 vecinos más similares según distancia de Gower",
+       x = NULL, y = "Valor") +
+  theme_hp +
+  theme(legend.position = "none",
+        axis.text.x     = element_text(angle = 15, hjust = 1, face = "bold"),
+        strip.text      = element_text(size = 11, face = "bold", color = "#2C7BB6"))
+print(p_comp)
+cat("✓ Tratamiento de outliers completado.\n")
+
+
+# --- PASO 8: Estandarización Z-Score --------------------------
+cat("\nPASO 8 — Estandarización Z-Score (dlookr)\n")
+vars_escalar <- c("GrLivArea","LotArea","TotalBsmtSF","TotalSF")
+for (v in vars_escalar)
+  train[[paste0(v, "_z")]] <- dlookr::transform(train[[v]], method = "zscore")
+
+
+# --- PASO 9: One Hot Encoding ---------------------------------
+cat("\nPASO 9 — One Hot Encoding (fastDummies)\n")
+train <- dummy_cols(train,
+                    select_columns      = c("Neighborhood","BldgType","SaleCondition"),
+                    remove_first_dummy  = TRUE,
+                    remove_selected_columns = FALSE)
+cat("Variables dummy creadas exitosamente.\n")
+
+
+# --- PASO 10: Detección de Inconsistencias Lógicas -----------
+cat("\n--- Verificación de Reglas Lógicas (post-imputación) ---\n")
+reglas <- editset(c("SalePrice > 0","LotArea > 0","TotalBsmtSF >= 0",
+                    "GrLivArea >= FlrSF_1st","YearBuilt <= YrSold"))
+
+train_chk <- train %>%
+  mutate(YrSold = as.integer(as.character(YrSold))) %>%
+  dplyr::select(SalePrice, LotArea, TotalBsmtSF, GrLivArea, FlrSF_1st, YearBuilt, YrSold)
+
+violaciones <- violatedEdits(reglas, train_chk)
+print(summary(violaciones))
+
+if (sum(violaciones, na.rm = TRUE) > 0) {
+  cat("¡Inconsistencias detectadas! Corrigiendo con k-NN...\n")
+  errores_loc  <- localizeErrors(reglas, train_chk, method = "mip")$adapt
+  cols_eval    <- colnames(errores_loc)
+  for (col in cols_eval) {
+    filas_err <- which(errores_loc[, col])
+    if (length(filas_err) > 0) {
+      train[[col]][filas_err] <- NA
+      cat(sprintf(" -> NA en '%s' (filas: %s)\n", col, paste(filas_err, collapse = ", ")))
+    }
+  }
+  train <- suppressWarnings(VIM::kNN(train, variable = cols_eval, k = 5, imp_var = FALSE))
+  train <- train %>%
+    mutate(TotalSF = TotalBsmtSF + FlrSF_1st + FlrSF_2nd,
+           QualSF  = as.integer(OverallQual) * TotalSF)
+  cat("✓ Inconsistencias corregidas.\n")
+} else {
+  cat("✓ Datos lógicamente consistentes.\n")
+}
+
+
+# --------------------------------------------------------------
+# a.3) RESUMEN FINAL DEL CONJUNTO
+# --------------------------------------------------------------
+cat("\n", strrep("=", 65), "\n")
+cat("RESUMEN FINAL (TRAS PREPROCESADO)\n")
+cat(strrep("=", 65), "\n")
+cat(sprintf("Individuos           : %d\n",  nrow(train)))
+cat(sprintf("Variables totales    : %d\n",  ncol(train)))
+cat(sprintf("  - Numéricas        : %d\n",  sum(sapply(train, is.numeric))))
+cat(sprintf("  - Factor / Ordinal : %d\n",  sum(sapply(train, is.factor))))
+cat(sprintf("  - Valores perdidos : %d\n\n",sum(is.na(train))))
+print(skim(train))
+
+
+# ==============================================================
+# b) ANÁLISIS EXPLORATORIO DE DATOS (EDA)
+# ==============================================================
+
+# ------------------------------------------------------------------
+# BLOQUE 0 — Normalidad: QQ-Plots + Test de Lilliefors
+# ------------------------------------------------------------------
+cat("\n", strrep("=", 65), "\n")
+cat("ANÁLISIS DE NORMALIDAD: ORIGINAL VS BOX-COX\n")
+cat(strrep("=", 65), "\n")
+
+par(mfrow = c(1, 2))
+car::qqPlot(train$SalePrice, pch = 19, col = "#D7191C",
+            main = "QQ-Plot: SalePrice Original",
+            xlab = "Cuantiles teóricos", ylab = "Cuantiles muestrales")
+car::qqPlot(train$SalePrice_BC, pch = 19, col = "#2C7BB6",
+            main = paste0("QQ-Plot: SalePrice (Box-Cox, λ=", round(lambda_opt, 2), ")"),
+            xlab = "Cuantiles teóricos", ylab = "Cuantiles muestrales")
+par(mfrow = c(1, 1))
+
+test_orig <- nortest::lillie.test(train$SalePrice[!is.na(train$SalePrice)])
+test_bc   <- nortest::lillie.test(train$SalePrice_BC[!is.na(train$SalePrice_BC)])
+cat(sprintf("Test Lilliefors (Original) : p-valor = %.4e\n", test_orig$p.value))
+cat(sprintf("Test Lilliefors (Box-Cox)  : p-valor = %.4e\n", test_bc$p.value))
+
+
+# ------------------------------------------------------------------
+# BLOQUE 1 — Distribución de SalePrice: original vs Box-Cox
+# ------------------------------------------------------------------
+p_sp1 <- ggplot(train, aes(x = SalePrice)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50,
+                 fill = "#2C7BB6", alpha = 0.75, color = "white") +
+  geom_density(color = "#D7191C", linewidth = 1.1) +
+  scale_x_continuous(labels = label_dollar()) +
+  labs(title    = "Distribución de SalePrice (precio de venta)",
+       subtitle = sprintf("n = %d  |  Media = %s  |  Mediana = %s  |  Asimetría = %.2f  |  Curtosis = %.2f",
+                          nrow(train), dollar(round(mean(train$SalePrice))),
+                          dollar(median(train$SalePrice)),
+                          skewness(train$SalePrice), kurtosis(train$SalePrice)),
+       x = "Precio de venta (USD)", y = "Densidad") + theme_hp
+
+p_sp2 <- ggplot(train, aes(x = SalePrice_BC)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50,
+                 fill = "#1A9641", alpha = 0.75, color = "white") +
+  geom_density(color = "#D7191C", linewidth = 1.1) +
+  labs(title    = sprintf("SalePrice (Box-Cox, λ = %.2f)", lambda_opt),
+       subtitle = sprintf("Asimetría = %.2f | Curtosis = %.2f",
+                          skewness(train$SalePrice_BC), kurtosis(train$SalePrice_BC)),
+       x = "SalePrice transformado", y = "Densidad") + theme_hp
+
+grid.arrange(p_sp1, p_sp2, ncol = 2,
+             top = "Variable respuesta: SalePrice original y transformación Box-Cox óptima")
+
+
+# ------------------------------------------------------------------
+# BLOQUE 2 — Estadísticos descriptivos (variables numéricas clave)
+# ------------------------------------------------------------------
+num_vars_key <- c("SalePrice","LotArea","LotFrontage","GrLivArea",
+                  "TotalSF","TotalBsmtSF","FlrSF_1st","FlrSF_2nd",
+                  "GarageArea","TotalBaths","HouseAge","RemodAge",
+                  "Fireplaces","TotRmsAbvGrd","WoodDeckSF","OpenPorchSF")
+
+stats_tbl <- train %>%
+  dplyr::select(all_of(num_vars_key)) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Valor") %>%
+  group_by(Variable) %>%
+  summarise(N       = sum(!is.na(Valor)),
+            Media   = round(mean(Valor, na.rm = TRUE), 1),
+            Mediana = round(median(Valor, na.rm = TRUE), 1),
+            DT      = round(sd(Valor,   na.rm = TRUE), 1),
+            Min     = round(min(Valor,  na.rm = TRUE), 1),
+            Q1      = round(quantile(Valor, 0.25, na.rm = TRUE), 1),
+            Q3      = round(quantile(Valor, 0.75, na.rm = TRUE), 1),
+            Max     = round(max(Valor,  na.rm = TRUE), 1),
+            Asim    = round(skewness(Valor, na.rm = TRUE), 2),
+            Kurt    = round(kurtosis(Valor, na.rm = TRUE), 2),
+            .groups = "drop") %>%
+  arrange(desc(abs(Asim)))
+
+cat("\nEstadísticos descriptivos — variables numéricas clave:\n")
+print(stats_tbl, n = Inf)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 3 — Histogramas en mosaico
+# ------------------------------------------------------------------
+hist_vars  <- c("LotArea","GrLivArea","TotalBsmtSF","GarageArea",
+                "TotalSF","TotalBaths","HouseAge","LotFrontage")
+plots_hist <- lapply(hist_vars, function(v) {
+  ggplot(train, aes(x = .data[[v]])) +
+    geom_histogram(bins = 40, fill = "#4393C3", alpha = 0.85, color = "white") +
+    scale_x_continuous(labels = label_comma()) +
+    labs(title = v, x = NULL, y = "Frec.") +
+    theme_minimal(base_size = 8) +
+    theme(plot.title = element_text(face = "bold", size = 9))
+})
+do.call(grid.arrange, c(plots_hist, ncol = 4,
+                        top = "Distribución de variables numéricas clave"))
+
+
+# ------------------------------------------------------------------
+# BLOQUE 4 — Boxplot: SalePrice × OverallQual
+# ------------------------------------------------------------------
+p_qual <- ggplot(train, aes(x = OverallQual, y = SalePrice, fill = OverallQual)) +
+  geom_boxplot(outlier.alpha = 0.35, outlier.size = 0.8) +
+  scale_y_continuous(labels = label_dollar()) +
+  scale_fill_viridis_d(option = "plasma") +
+  labs(title    = "Precio de venta por Calidad General (OverallQual)",
+       subtitle = "Escala ordinal: 1 = Muy deficiente → 10 = Excelente",
+       x = "Calidad general", y = "Precio de venta (USD)") +
+  theme_hp + theme(legend.position = "none")
+print(p_qual)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 5 — Scatter: SalePrice vs GrLivArea
+# ------------------------------------------------------------------
+p_sc1 <- ggplot(train, aes(x = GrLivArea, y = SalePrice,
+                            color = as.numeric(OverallQual))) +
+  geom_point(alpha = 0.45, size = 1.5) +
+  geom_smooth(method = "lm", color = "black", se = TRUE,
+              linewidth = 0.9, linetype = "dashed") +
+  scale_y_continuous(labels = label_dollar()) +
+  scale_x_continuous(labels = label_comma()) +
+  scale_color_viridis_c(option = "plasma", name = "Calidad\nGeneral") +
+  labs(title    = "SalePrice vs Superficie habitable (GrLivArea)",
+       subtitle = sprintf("Correlación de Pearson: r = %.3f",
+                          cor(train$SalePrice, train$GrLivArea)),
+       x = "Superficie habitable (sq ft)", y = "Precio de venta (USD)") + theme_hp
+print(p_sc1)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 6 — Scatter: SalePrice vs TotalSF
+# ------------------------------------------------------------------
+p_sc2 <- ggplot(train, aes(x = TotalSF, y = SalePrice,
+                            color = as.numeric(OverallQual))) +
+  geom_point(alpha = 0.45, size = 1.5) +
+  geom_smooth(method = "lm", color = "black", se = TRUE,
+              linewidth = 0.9, linetype = "dashed") +
+  scale_y_continuous(labels = label_dollar()) +
+  scale_x_continuous(labels = label_comma()) +
+  scale_color_viridis_c(option = "plasma", name = "Calidad\nGeneral") +
+  labs(title    = "SalePrice vs Superficie Total (TotalSF = sótano + P.baja + P.alta)",
+       subtitle = sprintf("Correlación de Pearson: r = %.3f",
+                          cor(train$SalePrice, train$TotalSF)),
+       x = "Superficie total (sq ft)", y = "Precio de venta (USD)") + theme_hp
+print(p_sc2)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 7 — Precio mediano por Neighborhood
+# ------------------------------------------------------------------
+p_neigh <- train %>%
+  group_by(Neighborhood) %>%
+  summarise(median_price = median(SalePrice), n = n(), .groups = "drop") %>%
+  mutate(Neighborhood = fct_reorder(Neighborhood, median_price)) %>%
+  ggplot(aes(x = Neighborhood, y = median_price, fill = median_price)) +
+  geom_col() +
+  geom_text(aes(label = paste0("n=", n)), hjust = -0.1, size = 2.7, color = "grey30") +
+  scale_y_continuous(labels = label_dollar(), expand = expansion(mult = c(0, 0.18))) +
+  scale_fill_viridis_c(option = "magma", labels = label_dollar(), name = "Precio\nmediano") +
+  coord_flip() +
+  labs(title    = "Precio mediano de venta por Barrio (Neighborhood)",
+       subtitle = "Ordenado de menor a mayor precio mediano",
+       x = NULL, y = "Precio mediano (USD)") + theme_hp
+print(p_neigh)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 8 — Precio vs Antigüedad
+# ------------------------------------------------------------------
+p_age <- ggplot(train, aes(x = HouseAge, y = SalePrice)) +
+  geom_point(alpha = 0.45, color = "#2C7BB6") +
+  geom_smooth(method = "loess", color = "#D7191C", se = TRUE, linetype = "dashed") +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title    = "Precio de venta vs Antigüedad de la vivienda (HouseAge)",
+       subtitle = sprintf("Correlación de Spearman: rho = %.3f",
+                          cor(train$SalePrice, train$HouseAge,
+                              use = "pairwise.complete.obs", method = "spearman")),
+       x = "Antigüedad (años)", y = "Precio de venta (USD)") + theme_hp
+print(p_age)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 9 — Precio mediano y volumen por mes
+# ------------------------------------------------------------------
+p_mes <- train %>%
+  group_by(MoSold) %>%
+  summarise(median_price = median(SalePrice), n = n(), .groups = "drop") %>%
+  ggplot(aes(x = MoSold, y = median_price, group = 1)) +
+  geom_line(color = "#2C7BB6", linewidth = 1.2) +
+  geom_point(aes(size = n), color = "#D7191C", alpha = 0.85) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title    = "Precio mediano y volumen de ventas por mes",
+       subtitle = "El tamaño del punto indica el número de transacciones",
+       x = "Mes de venta", y = "Precio mediano (USD)", size = "Nº ventas") + theme_hp
+print(p_mes)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 10 — Variables indicadoras binarias (HasXxx)
+# ------------------------------------------------------------------
+bin_vars  <- c("HasPool","HasGarage","HasFireplace","HasBasement")
+plots_bin <- lapply(bin_vars, function(v) {
+  train %>%
+    group_by(.data[[v]]) %>%
+    summarise(mediana = median(SalePrice), n = n(), .groups = "drop") %>%
+    ggplot(aes(x = .data[[v]], y = mediana, fill = .data[[v]])) +
+    geom_col(width = 0.55) +
+    geom_text(aes(label = paste0("n=", n)), vjust = -0.4, size = 3, color = "grey30") +
+    scale_y_continuous(labels = label_dollar(), expand = expansion(mult = c(0, 0.15))) +
+    scale_fill_manual(values = c("No" = "#FC8D59", "Sí" = "#74ADD1")) +
+    labs(title = v, x = NULL, y = "Precio mediano") +
+    theme_minimal(base_size = 9) +
+    theme(plot.title = element_text(face = "bold"), legend.position = "none")
+})
+do.call(grid.arrange, c(plots_bin, ncol = 4,
+                        top = "Precio mediano según características adicionales"))
+
+
+# ------------------------------------------------------------------
+# BLOQUE 11 — Violin + Boxplot: SalePrice × BldgType
+# ------------------------------------------------------------------
+p_bldg <- ggplot(train, aes(x = BldgType, y = SalePrice, fill = BldgType)) +
+  geom_violin(trim = FALSE, alpha = 0.65) +
+  geom_boxplot(width = 0.1, fill = "white",
+               outlier.size = 0.5, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_dollar()) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Distribución del precio de venta por tipo de edificio (BldgType)",
+       x = "Tipo de edificio", y = "Precio de venta (USD)") +
+  theme_hp + theme(legend.position = "none")
+print(p_bldg)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 12 — Frecuencias de variables categóricas clave
+# ------------------------------------------------------------------
+cat_key   <- c("MSZoning","BldgType","HouseStyle","Foundation",
+               "GarageType","SaleCondition","CentralAir","Neighborhood")
+plots_bar <- lapply(cat_key, function(v) {
+  tmp <- train %>%
+    count(.data[[v]], name = "n") %>%
+    arrange(desc(n)) %>% slice_head(n = 15) %>%
+    mutate(nivel = fct_reorder(as.character(.data[[v]]), n))
+  ggplot(tmp, aes(x = nivel, y = n)) +
+    geom_col(fill = "#2CA25F", alpha = 0.85) +
+    coord_flip() +
+    labs(title = v, x = NULL, y = "Frec.") +
+    theme_minimal(base_size = 8) +
+    theme(plot.title = element_text(face = "bold", size = 8))
+})
+do.call(grid.arrange, c(plots_bar, ncol = 4,
+                        top = "Frecuencias de variables categóricas clave"))
+
+
+# ------------------------------------------------------------------
+# BLOQUE 13 — Tabla de frecuencias: OverallQual
+# ------------------------------------------------------------------
+freq_qual <- train %>%
+  count(OverallQual, name = "Frecuencia") %>%
+  mutate(`Porcentaje (%)`      = round(100 * Frecuencia / sum(Frecuencia), 1),
+         `Frec. acumulada`     = cumsum(Frecuencia),
+         `Porc. acumulado (%)` = round(100 * cumsum(Frecuencia) / sum(Frecuencia), 1)) %>%
+  rename(`Calidad general` = OverallQual)
+cat("\nTabla de frecuencias: OverallQual\n")
+print(freq_qual)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 14 — Estadísticos de SalePrice × OverallQual
+# ------------------------------------------------------------------
+tab_qual <- train %>%
+  group_by(OverallQual) %>%
+  summarise(N = n(),
+            Mínimo  = dollar(min(SalePrice)),
+            Q1      = dollar(quantile(SalePrice, 0.25)),
+            Mediana = dollar(median(SalePrice)),
+            Media   = dollar(round(mean(SalePrice))),
+            Q3      = dollar(quantile(SalePrice, 0.75)),
+            Máximo  = dollar(max(SalePrice)),
+            DT      = dollar(round(sd(SalePrice))),
+            .groups = "drop")
+cat("\nEstadísticos de SalePrice por Calidad General:\n")
+print(tab_qual)
+
+
+# ------------------------------------------------------------------
+# BLOQUE 15 — Matriz de correlación de Spearman
+# ------------------------------------------------------------------
+cor_vars <- c("SalePrice","GrLivArea","LotArea","LotFrontage",
+              "TotalBsmtSF","GarageArea","TotalSF","TotalBaths",
+              "HouseAge","RemodAge","TotRmsAbvGrd","Fireplaces",
+              "WoodDeckSF","OpenPorchSF","OverallQual_n","QualSF")
+
+train_cor <- train %>%
+  mutate(OverallQual_n = as.numeric(OverallQual)) %>%
+  dplyr::select(all_of(cor_vars))
+
+cor_mat <- cor(train_cor, use = "pairwise.complete.obs", method = "spearman")
+
+par(mar = c(0, 0, 3, 0))
+corrplot(cor_mat, method = "color", type = "upper", order = "hclust",
+         tl.cex = 0.78, tl.col = "black", addCoef.col = "black", number.cex = 0.52,
+         col   = colorRampPalette(c("#D7191C","white","#2C7BB6"))(200),
+         title = "Matriz de correlación de Spearman — Variables numéricas clave",
+         mar   = c(0, 0, 2, 0))
+
+
+# ------------------------------------------------------------------
+# BLOQUE 16 — Top 10 correlaciones con SalePrice
+# ------------------------------------------------------------------
+cor_sp  <- cor_mat["SalePrice", ]
+top_cor <- sort(abs(cor_sp[names(cor_sp) != "SalePrice"]), decreasing = TRUE)[1:10]
+
+p_top_cor <- data.frame(Variable = names(top_cor), Correlacion = as.numeric(top_cor)) %>%
+  mutate(Variable = fct_reorder(Variable, Correlacion)) %>%
+  ggplot(aes(x = Variable, y = Correlacion, fill = Correlacion)) +
+  geom_col() +
+  geom_text(aes(label = round(Correlacion, 3)), hjust = -0.1, size = 3.2) +
+  scale_fill_gradient(low = "#FEE090", high = "#D7191C") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  coord_flip() +
+  labs(title    = "Top 10: Variables con mayor correlación con SalePrice",
+       subtitle = "Valor absoluto de la correlación de Spearman",
+       x = NULL, y = "|rho de Spearman|", fill = "|rho|") + theme_hp
+print(p_top_cor)
+
+
+# ==============================================================
+# b.2) GRÁFICOS INTERACTIVOS (plotly)
+# ==============================================================
+
+# Interactivo 1: SalePrice vs TotalSF
+df_inter <- train %>%
+  mutate(OverallQual_n = as.numeric(OverallQual),
+         SP_fmt  = scales::dollar(SalePrice),
+         SF_fmt  = scales::comma(TotalSF))
+
+p_inter1 <- plot_ly(
+  data = df_inter, x = ~TotalSF, y = ~SalePrice,
+  color = ~OverallQual_n, colors = viridis(10, option = "plasma"),
+  type = "scatter", mode = "markers",
+  marker = list(size = 6, opacity = 0.65),
+  text = ~paste0("<b>Precio:</b> ", SP_fmt,
+                 "<br><b>TotalSF:</b> ", SF_fmt, " sq ft",
+                 "<br><b>Barrio:</b> ", Neighborhood,
+                 "<br><b>Calidad:</b> ", OverallQual,
+                 "<br><b>Tipo:</b> ", BldgType,
+                 "<br><b>Estilo:</b> ", HouseStyle,
+                 "<br><b>Año construido:</b> ", YearBuilt,
+                 "<br><b>Año vendido:</b> ", YrSold,
+                 "<br><b>Condición:</b> ", SaleCondition),
+  hoverinfo = "text") %>%
+  layout(
+    title = list(text = "<b>SalePrice vs Superficie Total</b><br><sup>Coloreado por Calidad General (1-10)</sup>",
+                 font = list(size = 15)),
+    xaxis = list(title = "TotalSF (sq ft)", tickformat = ","),
+    yaxis = list(title = "SalePrice (USD)", tickprefix = "$", tickformat = ","),
+    hovermode = "closest", plot_bgcolor = "#F8F9FA", paper_bgcolor = "#FFFFFF",
+    font = list(family = "Arial"))
+print(p_inter1)
+
+# Interactivo 2: SalePrice vs QualSF (feature reina)
+df_inter2 <- train %>%
+  mutate(OverallQual_n = as.numeric(OverallQual),
+         SP_fmt     = scales::dollar(SalePrice),
+         QSF_fmt    = scales::comma(QualSF),
+         TSF_fmt    = scales::comma(TotalSF))
+
+p_inter2 <- plot_ly(
+  data = df_inter2, x = ~QualSF, y = ~SalePrice,
+  color = ~OverallQual_n, colors = viridis(10, option = "plasma"),
+  type = "scatter", mode = "markers",
+  marker = list(size = 6, opacity = 0.65),
+  text = ~paste0("<b>Precio:</b> ", SP_fmt,
+                 "<br><b>QualSF:</b> ", QSF_fmt,
+                 "<br><b>TotalSF:</b> ", TSF_fmt, " sq ft",
+                 "<br><b>Barrio:</b> ", Neighborhood,
+                 "<br><b>Calidad:</b> ", OverallQual,
+                 "<br><b>Año vendido:</b> ", YrSold),
+  hoverinfo = "text") %>%
+  layout(
+    title = list(text = "<b>SalePrice vs QualSF (OverallQual × TotalSF)</b><br><sup>Feature reina — coloreado por Calidad General</sup>",
+                 font = list(size = 15)),
+    xaxis = list(title = "QualSF", tickformat = ","),
+    yaxis = list(title = "SalePrice (USD)", tickprefix = "$", tickformat = ","),
+    hovermode = "closest", plot_bgcolor = "#F8F9FA", paper_bgcolor = "#FFFFFF",
+    font = list(family = "Arial"))
+print(p_inter2)
+
+
+# ==============================================================
+# c) TABLAS DE CONTINGENCIA Y MEDIDAS DE ASOCIACIÓN
+# ==============================================================
+cat("\n", strrep("=", 65), "\n")
+cat("SECCIÓN c) — TABLAS DE CONTINGENCIA Y MEDIDAS DE ASOCIACIÓN\n")
+cat(strrep("=", 65), "\n")
+
+
+# ------------------------------------------------------------------
+# c.1) Variables NOMINALES: BldgType × SaleCondition
+# ------------------------------------------------------------------
+cat("\n--- c.1) Tabla de contingencia: BldgType × SaleCondition ---\n")
+
+tab_bldg_sale <- table(train$BldgType, train$SaleCondition)
+cat("Frecuencias absolutas:\n")
+print(addmargins(tab_bldg_sale))
+cat("\nFrecuencias relativas por fila (%):\n")
+print(round(prop.table(tab_bldg_sale, margin = 1) * 100, 1))
+
+par(mar = c(3, 3, 4, 1))
+mosaicplot(tab_bldg_sale,
+           main  = "Gráfico de mosaico: Tipo de Edificio × Condición de Venta",
+           sub   = "Área de cada celda proporcional a su frecuencia conjunta",
+           color = RColorBrewer::brewer.pal(6, "Set2"),
+           las = 2, cex.axis = 0.75)
+
+# Tests de independencia
+chi_bs  <- chisq.test(tab_bldg_sale, correct = FALSE)
+min_exp <- min(chi_bs$expected)
+cat(sprintf("\nTest χ²: X² = %.3f  |  gl = %d  |  p-valor = %.4e\n",
+            chi_bs$statistic, chi_bs$parameter, chi_bs$p.value))
+cat(sprintf("Frec. esperada mínima: %.2f  %s\n", min_exp,
+            ifelse(min_exp < 5, "→ Se aconseja Test de Fisher", "→ χ² válido")))
+
+g_bs <- loglm(~ 1 + 2, data = tab_bldg_sale)
+cat("\nTest G (razón de verosimilitudes):\n")
+print(g_bs)
+
+# Medidas de asociación nominal
+cat("\nMedidas de asociación nominal:\n")
+print(assocstats(tab_bldg_sale))
+cat(sprintf("  V de Cramer  : %.4f\n", CramerV(tab_bldg_sale)))
+cat(sprintf("  C de Pearson : %.4f\n", ContCoef(tab_bldg_sale, correct = FALSE)))
+cat("  (V próximo a 0 = independencia; próximo a 1 = asociación perfecta)\n")
+
+
+# ------------------------------------------------------------------
+# c.2) Variables ORDINALES: OverallQual (agrupada) × KitchenQual
+# ------------------------------------------------------------------
+cat("\n--- c.2) Tabla de contingencia: OverallQual × KitchenQual (ordinales) ---\n")
+
+train <- train %>%
+  mutate(Qual_cat = cut(as.integer(OverallQual),
+                        breaks = c(0, 4, 7, 10),
+                        labels = c("Baja (1-4)", "Media (5-7)", "Alta (8-10)"),
+                        ordered_result = TRUE))
+
+tab_qual_kit <- table(train$Qual_cat, train$KitchenQual)
+cat("Frecuencias absolutas:\n")
+print(addmargins(tab_qual_kit))
+
+# Gráfico de barras apiladas proporcionales
+df_qk <- as.data.frame(tab_qual_kit) %>% rename(Qual_cat = Var1, KitchenQual = Var2)
+p_qk  <- ggplot(df_qk, aes(x = Qual_cat, y = Freq, fill = KitchenQual)) +
+  geom_col(position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_brewer(palette = "RdYlGn", direction = 1, name = "Calidad cocina") +
+  labs(title    = "Calidad General vs Calidad de Cocina",
+       subtitle = "Distribución proporcional por categoría de calidad general",
+       x = "Calidad general (agrupada)", y = "Proporción") + theme_hp
+print(p_qk)
+
+chi_qk <- chisq.test(tab_qual_kit, correct = FALSE)
+cat(sprintf("\nTest χ²: X² = %.3f  |  gl = %d  |  p-valor = %.4e\n",
+            chi_qk$statistic, chi_qk$parameter, chi_qk$p.value))
+
+# Medidas de asociación ordinal (Gamma, D de Somers, Tau-b, Tau-c)
+cat("\nMedidas de asociación ordinal:\n")
+gamma_v  <- GoodmanKruskalGamma(tab_qual_kit, conf.level = 0.95)
+somers_c <- SomersDelta(tab_qual_kit, direction = "column", conf.level = 0.95)
+somers_r <- SomersDelta(tab_qual_kit, direction = "row",    conf.level = 0.95)
+tau_b    <- KendallTauB(tab_qual_kit, conf.level = 0.95)
+tau_c    <- StuartTauC(tab_qual_kit,  conf.level = 0.95)
+cat(sprintf("  Gamma de Goodman-Kruskal : %.4f  [IC 95%%: %.4f – %.4f]\n",
+            gamma_v[1],  gamma_v[2],  gamma_v[3]))
+cat(sprintf("  D de Somers (C|R)        : %.4f  [IC 95%%: %.4f – %.4f]\n",
+            somers_c[1], somers_c[2], somers_c[3]))
+cat(sprintf("  D de Somers (R|C)        : %.4f  [IC 95%%: %.4f – %.4f]\n",
+            somers_r[1], somers_r[2], somers_r[3]))
+cat(sprintf("  Tau-b de Kendall         : %.4f  [IC 95%%: %.4f – %.4f]\n",
+            tau_b[1], tau_b[2], tau_b[3]))
+cat(sprintf("  Tau-c de Kendall (Stuart): %.4f  [IC 95%%: %.4f – %.4f]\n",
+            tau_c[1], tau_c[2], tau_c[3]))
+cat("  γ > 0 → asociación positiva: mayor calidad general → mayor calidad de cocina.\n")
+
+
+# ------------------------------------------------------------------
+# c.3) Correlaciones entre variables CUANTITATIVAS
+# ------------------------------------------------------------------
+cat("\n--- c.3) Correlaciones entre variables cuantitativas ---\n")
+
+quant_cor_vars <- c("SalePrice","TotalSF","GrLivArea","TotalBsmtSF",
+                    "GarageArea","LotArea","HouseAge","TotalBaths",
+                    "TotRmsAbvGrd","Fireplaces","OpenPorchSF","WoodDeckSF")
+df_cor <- train %>% dplyr::select(all_of(quant_cor_vars))
+
+cat("\nCorrelación de Pearson con SalePrice:\n")
+cor_p <- cor(df_cor, use = "pairwise.complete.obs", method = "pearson")
+print(round(cor_p["SalePrice", ], 3))
+
+cat("\nCorrelación de Spearman con SalePrice:\n")
+cor_s <- cor(df_cor, use = "pairwise.complete.obs", method = "spearman")
+print(round(cor_s["SalePrice", ], 3))
+
+# Matriz de dispersión con coeficientes (PerformanceAnalytics)
+df_cor_plot <- train %>%
+  dplyr::select(SalePrice, TotalSF, GrLivArea, GarageArea, HouseAge, TotalBaths)
+chart.Correlation(df_cor_plot, histogram = TRUE, method = "pearson", pch = 19)
+title(main = "Matriz de dispersión y correlaciones (Pearson)",
+      sub  = "Diagonal: distribución | Superior: r | Inferior: nube de puntos")
+
+# Tests formales de correlación con p-valores
+cat("\n--- Tests de correlación de Spearman con SalePrice ---\n")
+for (v in setdiff(quant_cor_vars, "SalePrice")) {
+  ct <- cor.test(train$SalePrice, train[[v]], method = "spearman", exact = FALSE)
+  cat(sprintf("  %-20s | rho = %6.3f | p-valor = %.3e\n", v, ct$estimate, ct$p.value))
+}
+
+
+# ==============================================================
+# d) ANÁLISIS DE COMPONENTES PRINCIPALES (PCA)
+# ==============================================================
+cat("\n", strrep("=", 65), "\n")
+cat("SECCIÓN d) — ANÁLISIS DE COMPONENTES PRINCIPALES (PCA)\n")
+cat(strrep("=", 65), "\n")
+
+# ------------------------------------------------------------------
+# d.1) Selección y preparación de variables cuantitativas
+# ------------------------------------------------------------------
+pca_vars <- c("LotFrontage","LotArea","GrLivArea","TotalBsmtSF",
+              "FlrSF_1st","FlrSF_2nd","GarageArea","WoodDeckSF",
+              "OpenPorchSF","TotalBaths","TotRmsAbvGrd","Fireplaces",
+              "HouseAge","RemodAge","BedroomAbvGr","KitchenAbvGr")
+
+idx_pca    <- complete.cases(train[, pca_vars])
+train_pca  <- train[idx_pca, pca_vars]
+
+cat(sprintf("\nVariables seleccionadas para PCA: %d\n",  length(pca_vars)))
+cat(sprintf("Observaciones válidas (sin NA)   : %d\n\n", nrow(train_pca)))
+
+cat("Medias de las variables (antes de estandarizar):\n")
+print(round(apply(train_pca, 2, mean), 2))
+cat("\nVarianzas de las variables (antes de estandarizar):\n")
+print(round(apply(train_pca, 2, var), 2))
+cat("\nLas escalas son muy distintas → se estandarizan a media 0 y DT 1.\n")
+
+
+# ------------------------------------------------------------------
+# d.2) Ejecución del PCA
+# ------------------------------------------------------------------
+pca_out <- prcomp(train_pca, center = TRUE, scale. = TRUE)
+
+cat("\nCargas (loadings) de las 4 primeras componentes:\n")
+print(round(pca_out$rotation[, 1:4], 3))
+
+
+# ------------------------------------------------------------------
+# d.3) Varianza explicada y criterios de selección
+# ------------------------------------------------------------------
+pca_var  <- pca_out$sdev^2
+pve      <- pca_var / sum(pca_var)
+pve_acum <- cumsum(pve)
+
+tabla_pve <- data.frame(
+  CP            = paste0("PC", seq_along(pve)),
+  Autovalor     = round(pca_var, 4),
+  PVE           = round(pve * 100, 2),
+  PVE_Acumulada = round(pve_acum * 100, 2)
+)
+cat("\n--- Varianza explicada por componente ---\n")
+print(tabla_pve)
+
+n_kaiser <- sum(pca_var > 1)
+n_80     <- which(pve_acum >= 0.80)[1]
+cat(sprintf("\nCriterio de Kaiser (autovalor > 1)    : %d componentes\n", n_kaiser))
+cat(sprintf("Criterio del 80%% de varianza acumulada: %d componentes (%.1f%%)\n",
+            n_80, pve_acum[n_80] * 100))
+
+# Scree plot
+p_scree_pca <- fviz_eig(
+  pca_out, addlabels = TRUE, ylim = c(0, 45),
+  barfill = "#2C7BB6", barcolor = "#2C7BB6", linecolor = "#D7191C"
+) +
+  geom_hline(yintercept = 100 / length(pca_vars),
+             linetype = "dashed", color = "#1A9641", linewidth = 0.8) +
+  labs(title    = "Scree Plot — Varianza Explicada por Componente Principal",
+       subtitle = sprintf("Kaiser: %d CPs  |  80%% varianza: %d CPs", n_kaiser, n_80),
+       x = "Componente principal", y = "% varianza explicada") + theme_hp
+print(p_scree_pca)
+
+# Gráficos PVE individual y acumulada (base R)
+par(mfrow = c(1, 2))
+plot(pve, type = "b", pch = 19, col = "#2C7BB6",
+     xlab = "CP", ylab = "PVE", main = "PVE por componente", ylim = c(0, 1))
+abline(h = 1 / length(pca_vars), col = "#1A9641", lty = 2)
+plot(pve_acum, type = "b", pch = 19, col = "#D7191C",
+     xlab = "CP", ylab = "PVE acumulada", main = "PVE acumulada", ylim = c(0, 1))
+abline(h = 0.80, col = "#1A9641", lty = 2, lwd = 2)
+par(mfrow = c(1, 1))
+
+
+# ------------------------------------------------------------------
+# d.4) Biplot e interpretación visual
+# ------------------------------------------------------------------
+p_biplot_pca <- fviz_pca_biplot(
+  pca_out, repel = TRUE,
+  col.var   = "#D7191C", col.ind = "#2C7BB6",
+  alpha.ind = 0.18, geom.ind = "point",
+  pointsize = 1.2, arrowsize = 0.8, labelsize = 3
+) +
+  labs(title    = "Biplot PCA — Observaciones y variables (PC1 vs PC2)",
+       subtitle = sprintf("PC1 = %.1f%% | PC2 = %.1f%% | Total = %.1f%%",
+                          pve[1]*100, pve[2]*100, (pve[1]+pve[2])*100)) + theme_hp
+print(p_biplot_pca)
+
+
+# ------------------------------------------------------------------
+# d.5) Individuos coloreados por OverallQual
+# ------------------------------------------------------------------
+qual_grupo <- factor(train$OverallQual[idx_pca], ordered = TRUE)
+
+p_ind_qual <- fviz_pca_ind(
+  pca_out, geom = "point", habillage = qual_grupo,
+  palette   = viridis::viridis(10, option = "plasma"),
+  pointsize = 1.5, alpha.ind = 0.55, addEllipses = FALSE
+) +
+  labs(title    = "PCA — Observaciones coloreadas por Calidad General (OverallQual)",
+       subtitle = "OverallQual como criterio ilustrativo de agrupación",
+       color    = "Calidad\nGeneral") + theme_hp
+print(p_ind_qual)
+
+
+# ------------------------------------------------------------------
+# d.6) Círculo de correlaciones y contribuciones de variables
+# ------------------------------------------------------------------
+p_var_pca <- fviz_pca_var(
+  pca_out, col.var = "contrib",
+  gradient.cols = c("#FEE090","#FC8D59","#D7191C"),
+  repel = TRUE, labelsize = 3.5
+) +
+  labs(title    = "Círculo de correlaciones — Variables en el plano PC1-PC2",
+       subtitle = "Color según contribución a las dos primeras componentes") + theme_hp
+print(p_var_pca)
+
+var_pca_obj <- get_pca_var(pca_out)
+
+p_contrib_pc1 <- fviz_contrib(var_pca_obj, choice = "var", axes = 1, top = 15,
+                               fill = "#2C7BB6", color = "#2C7BB6") +
+  labs(title = "Contribución de variables a PC1") + theme_hp
+p_contrib_pc2 <- fviz_contrib(var_pca_obj, choice = "var", axes = 2, top = 15,
+                               fill = "#D7191C", color = "#D7191C") +
+  labs(title = "Contribución de variables a PC2") + theme_hp
+grid.arrange(p_contrib_pc1, p_contrib_pc2, ncol = 2,
+             top = "Contribución de las variables a las dos primeras componentes")
+
+
+# ------------------------------------------------------------------
+# d.7) Relación entre PC1 y SalePrice
+# ------------------------------------------------------------------
+scores_pca <- as.data.frame(pca_out$x)
+
+cor_cp_precio <- cor(
+  scores_pca[, 1:min(n_kaiser, ncol(scores_pca))],
+  train$SalePrice[idx_pca],
+  use = "pairwise.complete.obs"
+)
+cat("\nCorrelación de las componentes principales con SalePrice:\n")
+print(round(cor_cp_precio, 4))
+
+p_pc1_sp <- data.frame(PC1       = scores_pca$PC1,
+                        SalePrice  = train$SalePrice[idx_pca],
+                        OverallQual = qual_grupo) %>%
+  ggplot(aes(x = PC1, y = SalePrice, color = OverallQual)) +
+  geom_point(alpha = 0.45, size = 1.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "black",
+              linewidth = 0.8, linetype = "dashed") +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title    = "Relación entre PC1 y SalePrice",
+       subtitle = "La primera componente resume la estructura física de la vivienda",
+       x = "PC1", y = "SalePrice (USD)", color = "OverallQual") + theme_hp
+print(p_pc1_sp)
+
+
+# ==============================================================
+# e) ANÁLISIS DE CORRESPONDENCIAS (CA simple + MCA)
+# ==============================================================
+cat("\n", strrep("=", 65), "\n")
+cat("SECCIÓN e) — ANÁLISIS DE CORRESPONDENCIAS\n")
+cat(strrep("=", 65), "\n")
+
+
+# ==================================================================
+# e.1) ANÁLISIS DE CORRESPONDENCIAS SIMPLE (CA)
+# ==================================================================
+
+# ------------------------------------------------------------------
+# e.1.1) Tabla 1: Neighborhood × Grupo de Calidad
+# ------------------------------------------------------------------
+cat("\n--- e.1.1) CA: Neighborhood (top 10) × Grupo de Calidad ---\n")
+
+top_neighs <- train %>%
+  count(Neighborhood) %>% arrange(desc(n)) %>%
+  slice_head(n = 10) %>% pull(Neighborhood)
+
+train_ca1 <- train %>%
+  filter(Neighborhood %in% top_neighs) %>%
+  mutate(
+    QualGrupo = case_when(
+      as.numeric(OverallQual) <= 4 ~ "Baja (1-4)",
+      as.numeric(OverallQual) <= 7 ~ "Media (5-7)",
+      TRUE                         ~ "Alta (8-10)"
+    ),
+    QualGrupo = factor(QualGrupo, levels = c("Baja (1-4)","Media (5-7)","Alta (8-10)"))
+  )
+
+tabla_ca1 <- table(train_ca1$Neighborhood, train_ca1$QualGrupo)
+cat("\nTabla de contingencia:\n")
+print(tabla_ca1)
+
+chi_ca1   <- suppressWarnings(chisq.test(tabla_ca1))
+pct_exp1  <- 100 * mean(chi_ca1$expected > 5)
+cat(sprintf("\nTest χ²: X² = %.2f  |  gl = %d  |  p-valor = %.2e\n",
+            chi_ca1$statistic, chi_ca1$parameter, chi_ca1$p.value))
+cat(sprintf("Frec. esperadas > 5: %.1f%%  → el CA está justificado.\n", pct_exp1))
+
+cat("\nMedidas de asociación nominal:\n")
+print(assocstats(tabla_ca1))
+
+res_ca1  <- CA(tabla_ca1, graph = FALSE)
+eig_ca1  <- get_eigenvalue(res_ca1)
+cat("\nAutovalores del CA:\n")
+print(round(eig_ca1, 3))
+
+p_scree_ca1 <- fviz_screeplot(res_ca1, addlabels = TRUE, ylim = c(0, 100)) +
+  labs(title    = "Scree Plot — CA: Neighborhood × Calidad",
+       subtitle = "% de inercia explicada por dimensión") + theme_hp
+print(p_scree_ca1)
+
+p_biplot_ca1 <- fviz_ca_biplot(
+  res_ca1, repel = TRUE,
+  col.row = "#2C7BB6", col.col = "#D7191C",
+  shape.row = 17, shape.col = 15, labelsize = 4
+) +
+  labs(title    = "Biplot CA — Neighborhood × Grupo de Calidad",
+       subtitle = sprintf("Dim.1 = %.1f%%  |  Dim.2 = %.1f%%",
+                          eig_ca1[1, 2], eig_ca1[2, 2])) + theme_hp
+print(p_biplot_ca1)
+
+p_ca1_row <- fviz_contrib(res_ca1, choice = "row", axes = 1, top = 10, fill = "#2C7BB6") +
+  labs(title = "Contribución de barrios a Dim.1") + theme_hp
+p_ca1_col <- fviz_contrib(res_ca1, choice = "col", axes = 1, fill = "#D7191C") +
+  labs(title = "Contribución de grupos de calidad a Dim.1") + theme_hp
+grid.arrange(p_ca1_row, p_ca1_col, ncol = 2,
+             top = "Contribuciones al CA: Neighborhood × Calidad")
+
+
+# ------------------------------------------------------------------
+# e.1.2) Tabla 2: BldgType × SaleCondition
+# ------------------------------------------------------------------
+cat("\n--- e.1.2) CA: BldgType × SaleCondition ---\n")
+
+tabla_ca2 <- table(train$BldgType, train$SaleCondition)
+print(tabla_ca2)
+
+chi_ca2  <- suppressWarnings(chisq.test(tabla_ca2))
+pct_exp2 <- 100 * mean(chi_ca2$expected > 5)
+cat(sprintf("\nTest χ²: X² = %.2f  |  gl = %d  |  p-valor = %.2e\n",
+            chi_ca2$statistic, chi_ca2$parameter, chi_ca2$p.value))
+cat(sprintf("Frec. esperadas > 5: %.1f%%\n", pct_exp2))
+
+res_ca2 <- CA(tabla_ca2, graph = FALSE)
+eig_ca2 <- get_eigenvalue(res_ca2)
+
+p_biplot_ca2 <- fviz_ca_biplot(
+  res_ca2, repel = TRUE, map = "rowprincipal",
+  col.row = "#2C7BB6", col.col = "#D7191C", labelsize = 4
+) +
+  labs(title    = "Biplot CA — BldgType × SaleCondition",
+       subtitle = sprintf("Dim.1 = %.1f%%  |  Dim.2 = %.1f%%",
+                          eig_ca2[1, 2], eig_ca2[2, 2])) + theme_hp
+print(p_biplot_ca2)
+
+
+# ==================================================================
+# e.2) ANÁLISIS DE CORRESPONDENCIAS MÚLTIPLES (MCA)
+# ==================================================================
+cat("\n--- e.2) Análisis de Correspondencias Múltiples (MCA) ---\n")
+
+mca_activas    <- c("MSZoning","BldgType","HouseStyle","Foundation",
+                    "CentralAir","GarageType","SaleCondition")
+mca_quali_sup  <- c("OverallQual")
+mca_quanti_sup <- c("SalePrice","GrLivArea","HouseAge")
+
+train_mca <- train %>%
+  dplyr::select(all_of(c(mca_activas, mca_quali_sup, mca_quanti_sup))) %>%
+  drop_na()
+
+cat(sprintf("Variables activas            : %d\n", length(mca_activas)))
+cat(sprintf("Variables cualit. suplem.    : %d\n", length(mca_quali_sup)))
+cat(sprintf("Variables cuantit. suplem.   : %d\n", length(mca_quanti_sup)))
+cat(sprintf("Observaciones válidas        : %d\n", nrow(train_mca)))
+
+idx_qs  <- which(names(train_mca) %in% mca_quali_sup)
+idx_qts <- which(names(train_mca) %in% mca_quanti_sup)
+
+res_mca <- MCA(train_mca,
+               quali.sup  = idx_qs,
+               quanti.sup = idx_qts,
+               graph      = FALSE)
+
+eig_mca <- get_eigenvalue(res_mca)
+cat("\nAutovalores del MCA (primeras 10 dimensiones):\n")
+print(round(head(eig_mca, 10), 3))
+
+p_scree_mca <- fviz_screeplot(res_mca, addlabels = TRUE, ncp = 15, ylim = c(0, 20)) +
+  labs(title    = "Scree Plot — MCA",
+       subtitle = "% de inercia explicada por dimensión") + theme_hp
+print(p_scree_mca)
+
+# Mapa de categorías activas
+p_mca_var <- fviz_mca_var(
+  res_mca, repel = TRUE, col.var = "contrib",
+  gradient.cols = c("#FEE090","#FC8D59","#D7191C"),
+  labelsize = 3, ggtheme = theme_hp
+) +
+  labs(title    = "MCA — Mapa de categorías activas",
+       subtitle = "Coloreado por contribución a las dos primeras dimensiones")
+print(p_mca_var)
+
+# Individuos coloreados por OverallQual (variable suplementaria)
+p_mca_ind <- fviz_mca_ind(
+  res_mca, geom = "point", habillage = idx_qs,
+  addEllipses = TRUE, ellipse.level = 0.75,
+  pointsize = 1, alpha.ind = 0.30, ggtheme = theme_hp
+) +
+  labs(title    = "MCA — Individuos coloreados por OverallQual",
+       subtitle = "OverallQual como variable cualitativa suplementaria")
+print(p_mca_ind)
+
+# Biplot global
+p_mca_biplot <- fviz_mca_biplot(
+  res_mca, repel = TRUE, geom.ind = "point",
+  col.ind = "gray70", alpha.ind = 0.15,
+  col.var = "contrib",
+  gradient.cols = c("#FEE090","#D7191C"),
+  labelsize = 3, ggtheme = theme_hp
+) +
+  labs(title    = "MCA — Biplot de individuos y categorías",
+       subtitle = "Las modalidades próximas comparten perfiles similares")
+print(p_mca_biplot)
+
+# Contribuciones por dimensión
+p_mca_c1 <- fviz_contrib(res_mca, choice = "var", axes = 1, top = 15, fill = "#2C7BB6") +
+  labs(title = "Contribución de categorías a Dim.1") + theme_hp
+p_mca_c2 <- fviz_contrib(res_mca, choice = "var", axes = 2, top = 15, fill = "#D7191C") +
+  labs(title = "Contribución de categorías a Dim.2") + theme_hp
+grid.arrange(p_mca_c1, p_mca_c2, ncol = 2, top = "Contribuciones al MCA por dimensión")
+
+# Descripción automática de las dimensiones
+desc_mca <- dimdesc(res_mca, axes = c(1, 2))
+cat("\n--- Descripción de la Dimensión 1 del MCA ---\n")
+print(desc_mca[[1]])
+cat("\n--- Descripción de la Dimensión 2 del MCA ---\n")
+print(desc_mca[[2]])
+
+# Variables cuantitativas suplementarias proyectadas
+p_mca_qs <- fviz_mca_var(res_mca, choice = "quanti.sup",
+                          repel = TRUE, ggtheme = theme_hp) +
+  labs(title    = "MCA — Variables cuantitativas suplementarias",
+       subtitle = "Proyección de SalePrice, GrLivArea y HouseAge sobre las dimensiones del MCA")
+print(p_mca_qs)
+
+
+# ==============================================================
+# f) ANÁLISIS CLÚSTER (K-MEANS + JERÁRQUICO)
+# ==============================================================
+cat("\n", strrep("=", 65), "\n")
+cat("SECCIÓN f) — ANÁLISIS CLÚSTER\n")
+cat(strrep("=", 65), "\n")
+
+
+# ------------------------------------------------------------------
+# f.1) Preparación de datos
+# ------------------------------------------------------------------
+clust_vars <- c("GrLivArea","TotalBsmtSF","GarageArea","LotArea",
+                "TotalBaths","HouseAge","TotRmsAbvGrd","Fireplaces")
+
+idx_clust         <- complete.cases(train[, clust_vars])
+train_clust       <- train[idx_clust, clust_vars]
+train_clust_sc    <- scale(train_clust)
+
+cat(sprintf("\nVariables para clustering : %d\n", length(clust_vars)))
+cat(sprintf("Observaciones válidas     : %d\n",  nrow(train_clust_sc)))
+cat("Se trabaja con variables estandarizadas (Z-score).\n")
+
+
+# ------------------------------------------------------------------
+# f.2) K-MEANS: selección del número óptimo de clústeres
+# ------------------------------------------------------------------
+set.seed(101)
+
+# Método del codo (WCSS)
+wcss <- sapply(1:10, function(k)
+  kmeans(train_clust_sc, centers = k, nstart = 50)$tot.withinss)
+
+p_elbow <- ggplot(data.frame(k = 1:10, WCSS = wcss), aes(x = k, y = WCSS)) +
+  geom_point(color = "#2C7BB6", size = 2.5) +
+  geom_line(color = "#2C7BB6", linewidth = 1) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(title    = "Método del Codo — WCSS (K-Means)",
+       subtitle = "El punto de inflexión indica el K óptimo",
+       x = "Número de clústeres (K)", y = "WCSS") + theme_hp
+print(p_elbow)
+
+# Método de la silueta
+dist_clust <- dist(train_clust_sc)
+sil_prom   <- sapply(2:8, function(k) {
+  km_tmp <- kmeans(train_clust_sc, centers = k, nstart = 50)
+  mean(silhouette(km_tmp$cluster, dist_clust)[, 3])
+})
+k_opt <- (2:8)[which.max(sil_prom)]
+cat(sprintf("\nK óptimo (silueta máxima): K = %d\n", k_opt))
+
+p_sil_sel <- ggplot(data.frame(k = 2:8, Silueta = sil_prom), aes(x = k, y = Silueta)) +
+  geom_point(color = "#D7191C", size = 2.5) +
+  geom_line(color = "#D7191C", linewidth = 1) +
+  geom_vline(xintercept = k_opt, linetype = "dashed", color = "gray40") +
+  scale_x_continuous(breaks = 2:8) +
+  labs(title    = "Método de la Silueta — K-Means",
+       subtitle = sprintf("K = %d ofrece la mayor anchura media de silueta", k_opt),
+       x = "Número de clústeres (K)", y = "Anchura media de silueta") + theme_hp
+print(p_sil_sel)
+
+
+# ------------------------------------------------------------------
+# f.3) K-MEANS FINAL
+# ------------------------------------------------------------------
+set.seed(101)
+km_final <- kmeans(train_clust_sc, centers = k_opt, nstart = 50)
+
+cat(sprintf("\nK-Means con K = %d:\n", k_opt))
+cat("  Tamaño de cada clúster:\n")
+print(table(km_final$cluster))
+cat(sprintf("  BSS/TSS = %.1f%%\n", 100 * km_final$betweenss / km_final$totss))
+
+# Visualización en el plano PCA
+p_km <- fviz_cluster(
+  km_final, data = train_clust_sc,
+  geom = "point", pointsize = 1.2, alpha = 0.40,
+  ellipse.type = "convex", ggtheme = theme_hp
+) +
+  labs(title    = sprintf("K-Means (K = %d) — Proyección en el espacio PCA", k_opt),
+       subtitle = sprintf("BSS/TSS = %.1f%%", 100 * km_final$betweenss / km_final$totss))
+print(p_km)
+
+# Gráfico de silueta
+sil_final <- silhouette(km_final$cluster, dist_clust)
+p_sil_km  <- fviz_silhouette(sil_final) +
+  labs(title    = sprintf("Silueta — K-Means (K = %d)", k_opt),
+       subtitle = sprintf("Anchura media = %.3f", mean(sil_final[, 3]))) + theme_hp
+print(p_sil_km)
+
+
+# ------------------------------------------------------------------
+# f.4) Perfilado de clústeres K-Means
+# ------------------------------------------------------------------
+train$Cluster_KM <- NA_integer_
+train$Cluster_KM[idx_clust] <- km_final$cluster
+train$Cluster_KM <- factor(train$Cluster_KM)
+
+perfil_km <- train %>%
+  filter(!is.na(Cluster_KM)) %>%
+  group_by(Cluster_KM) %>%
+  summarise(
+    N               = n(),
+    Precio_Mediana  = round(median(SalePrice)),
+    Precio_Media    = round(mean(SalePrice)),
+    GrLivArea_Med   = round(median(GrLivArea)),
+    TotalBsmtSF_Med = round(median(TotalBsmtSF)),
+    GarageArea_Med  = round(median(GarageArea)),
+    LotArea_Med     = round(median(LotArea)),
+    HouseAge_Med    = round(median(HouseAge)),
+    TotalBaths_Med  = round(median(TotalBaths), 1),
+    .groups = "drop")
+cat("\nPerfil de clústeres K-Means:\n")
+print(perfil_km)
+
+# Boxplot de SalePrice por clúster
+p_km_price <- train %>%
+  filter(!is.na(Cluster_KM)) %>%
+  ggplot(aes(x = Cluster_KM, y = SalePrice, fill = Cluster_KM)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.30, outlier.size = 0.7) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title    = "SalePrice por Clúster K-Means",
+       subtitle = "Cada grupo agrupa viviendas con rasgos físicos similares",
+       x = "Clúster", y = "SalePrice (USD)") +
+  theme_hp + theme(legend.position = "none")
+print(p_km_price)
+
+# Heatmap de centroides estandarizados
+centroides_long <- as.data.frame(km_final$centers) %>%
+  mutate(Cluster = paste0("C", row_number())) %>%
+  pivot_longer(cols = -Cluster, names_to = "Variable", values_to = "Valor_Z")
+
+p_heatmap <- ggplot(centroides_long, aes(x = Variable, y = Cluster, fill = Valor_Z)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = round(Valor_Z, 2)), size = 3.2, fontface = "bold") +
+  scale_fill_gradient2(low = "#2C7BB6", mid = "white", high = "#D7191C",
+                       midpoint = 0, name = "Z-score") +
+  labs(title    = "Heatmap de Centroides Estandarizados (K-Means)",
+       subtitle = "Positivo = por encima de la media  |  Negativo = por debajo",
+       x = NULL, y = "Clúster") +
+  theme_hp +
+  theme(axis.text.x  = element_text(angle = 45, hjust = 1, face = "bold"),
+        panel.grid   = element_blank())
+print(p_heatmap)
+
+
+# ------------------------------------------------------------------
+# f.5) CLÚSTER JERÁRQUICO (enlace completo)
+# ------------------------------------------------------------------
+cat("\n--- f.5) Clúster Jerárquico (enlace completo, distancia euclídea) ---\n")
+
+hc_complete <- hclust(dist_clust, method = "complete")
+
+p_dend <- fviz_dend(
+  hc_complete, k = k_opt, rect = TRUE, cex = 0.35,
+  main = sprintf("Dendrograma — Enlace Completo (K = %d)", k_opt)
+)
+print(p_dend)
+
+clust_hc <- cutree(hc_complete, k = k_opt)
+train$Cluster_HC <- NA_integer_
+train$Cluster_HC[idx_clust] <- clust_hc
+train$Cluster_HC <- factor(train$Cluster_HC)
+
+cat("\nTamaño de los clústeres jerárquicos:\n")
+print(table(train$Cluster_HC))
+
+p_hc <- fviz_cluster(
+  list(data = train_clust_sc, cluster = clust_hc),
+  geom = "point", pointsize = 1.2, alpha = 0.40,
+  ellipse.type = "convex", ggtheme = theme_hp
+) +
+  labs(title    = sprintf("Clúster Jerárquico — Enlace Completo (K = %d)", k_opt),
+       subtitle = "Proyección de los grupos en el plano factorial")
+print(p_hc)
+
+
+# ------------------------------------------------------------------
+# f.6) Validación: asociación Clúster × OverallQual
+# ------------------------------------------------------------------
+cat("\n--- f.6) Validación: Cluster_KM × OverallQual ---\n")
+
+tab_clust_qual <- table(
+  train$Cluster_KM[!is.na(train$Cluster_KM)],
+  train$OverallQual[!is.na(train$Cluster_KM)]
+)
+cat("Tabla cruzada Cluster_KM × OverallQual:\n")
+print(tab_clust_qual)
+
+chi_cq  <- suppressWarnings(chisq.test(tab_clust_qual))
+pct_cq  <- 100 * mean(chi_cq$expected > 5)
+cat(sprintf("\nTest χ²: X² = %.1f  |  p-valor = %.2e\n",
+            chi_cq$statistic, chi_cq$p.value))
+cat(sprintf("Frec. esperadas > 5: %.1f%%\n", pct_cq))
+
+p_clust_qual <- train %>%
+  filter(!is.na(Cluster_KM)) %>%
+  ggplot(aes(x = Cluster_KM, fill = OverallQual)) +
+  geom_bar(position = "fill", alpha = 0.85) +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_viridis_d(option = "plasma", name = "OverallQual") +
+  labs(title    = "Composición de OverallQual por Clúster K-Means",
+       subtitle = "Proporción de cada nivel de calidad dentro de cada grupo",
+       x = "Clúster", y = "Proporción") + theme_hp
+print(p_clust_qual)
+
+
+# ==============================================================
+# RESUMEN FINAL
+# ==============================================================
+cat("\n", strrep("=", 65), "\n")
+cat("✓ ANÁLISIS COMPLETO FINALIZADO CON ÉXITO.\n")
+cat(strrep("=", 65), "\n\n")
+cat("Resumen de resultados:\n")
+cat(sprintf("  Preprocesado : %d obs. | %d variables tras limpieza\n",
+            nrow(train), ncol(train)))
+cat(sprintf("  PCA          : Kaiser = %d CPs | 80%% varianza = %d CPs\n",
+            n_kaiser, n_80))
+cat("  CA simple    : 2 tablas analizadas (Neighborhood×Calidad; BldgType×SaleCondition)\n")
+cat(sprintf("  MCA          : %d variables categóricas activas\n", length(mca_activas)))
+cat(sprintf("  K-Means      : K óptimo = %d (silueta máxima)\n", k_opt))
+cat("  Jerárquico   : enlace completo con distancia euclídea\n")
+cat(strrep("=", 65), "\n")
+como ves este codigo
