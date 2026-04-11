@@ -52,7 +52,7 @@ cat("CONTEXTO : Precios de venta de viviendas residenciales\n")
 cat("           en Ames, Iowa (EE.UU.) — años 2006-2010\n")
 cat(strrep("=", 65), "\n\n")
 
-# !! Ajusta la ruta a la ubicación de tu archivo train.csv !!
+# Ajustar la ruta si necesario
 train_raw <- read.csv("C:/Users/alega/OneDrive/Documentos/Análisis de Datos/Trabajo ADAT/House-prices/train.csv", header = TRUE, stringsAsFactors = FALSE)
 
 n_obs  <- nrow(train_raw)
@@ -141,12 +141,16 @@ for (v in na_none_cat) {
   train[[v]][is.na(train[[v]])] <- "None"
 }
 
+# Suponemos que para estas variables que sean na's significa que no tienen
+# de tal característica, imputamos por 0 (por ejemplo, área del garage)
 na_zero_num <- c(
   "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF",
   "TotalBsmtSF","BsmtFullBath", "BsmtHalfBath",
   "GarageCars", "GarageArea", "GarageYrBlt"
 )
 
+# Imputamos LotFrontage según el barrio (las casas tienen distribuciones
+# similares al estar en el mismo barrio)
 for (v in na_zero_num) {
   train[[v]][is.na(train[[v]])] <- 0
 }
@@ -160,12 +164,13 @@ train <- train %>%
   )) %>%
   ungroup()
 
+# Electrical tiene un solo na, imputamos por moda (variable categórica)
 moda_elec <- names(which.max(table(train$Electrical)))
 train$Electrical[is.na(train$Electrical)] <- moda_elec
 
 
 # --- PASO 3: Feature Engineering ------------------------------
-# Se extraen las nuevas variables ANTES de convertir YrSold a factor,
+# Se extraen las nuevas variables ANTES de convertir YrSold a factor
 # porque las operaciones aritméticas requieren valores numéricos.
 yr_num <- as.integer(as.character(train$YrSold))
 
@@ -178,7 +183,7 @@ b_cox <- boxcox(lm(precio_limpio ~ 1), plotit = FALSE)
 lambda_opt <- b_cox$x[which.max(b_cox$y)]
 cat(sprintf("\nLambda óptimo de Box-Cox para SalePrice: %.4f\n", lambda_opt))
 
-
+# Creamos nuevas variables que nos pueden ayudar a hacer el análisis descriptivo
 train <- train %>%
   mutate(
     SalePrice_BC  = (SalePrice^lambda_opt - 1) / lambda_opt,
@@ -212,7 +217,7 @@ print(round(cor_new, 3))
 # --- PASO 4: Conversión al tipo de dato correcto --------------
 
 # MSSubClass: código numérico que representa tipo de vivienda,
-# no una magnitud → factor nominal
+# no una magnitud, por lo que la hacemos factor nominal
 train$MSSubClass <- factor(train$MSSubClass)
 
 # OverallQual / OverallCond: escala 1–10 con orden real → ordinal
@@ -225,7 +230,7 @@ train$MoSold <- factor(train$MoSold, levels = 1:12, labels = month.abb)
 # YrSold: año de venta → factor nominal
 train$YrSold <- factor(train$YrSold)
 
-# Variables de calidad con escala estandarizada Po→Ex
+# Variables de calidad con escala estandarizada Po-Ex (Poor-Excellent)
 # "None" se incluye como primer nivel (casas sin esa característica)
 quality_levels <- c("None", "Po", "Fa", "TA", "Gd", "Ex")
 ord_qual_vars  <- c(
@@ -513,6 +518,9 @@ cat(sprintf("Test Lilliefors (Box-Cox)  : p-valor = %.4e\n", test_bc$p.value))
 
 cat("\nLa transformación de Box-Cox centra los cuantiles muestrales sobre la línea teórica,\n")
 cat("corrigiendo la asimetría de forma mucho más rigurosa que el logaritmo estándar.\n\n")
+cat("A pesar de que rechazamos normalidad en ambos casos, la diferencia del pvalor
+    es muy grande (tras la transformación estamos mucho más cerca de conseguir
+    que la distribución sea normal")
 
 
 # ------------------------------------------------------------------
@@ -991,7 +999,6 @@ cat(strrep("=", 65), "\n")
 # ==============================================================
 # PARTE 1.5: TABLAS DE CONTINGENCIA Y MEDIDAS DE ASOCIACIÓN
 # ==============================================================
-# Referencia: PDF ADAT_medidas_de_asociacion.pdf
 # Secciones:
 #   c.1) Variables categóricas derivadas
 #   c.2) Tabla 2×2: CentralAir × PriceCat (nominales)
@@ -1006,9 +1013,54 @@ cat(strrep("=", 65), "\n")
 
 cat("\n", strrep("=", 65), "\n")
 cat("PARTE 1.5 — TABLAS DE CONTINGENCIA Y MEDIDAS DE ASOCIACIÓN\n")
+
 cat(strrep("=", 65), "\n")
 
 pacman::p_load(DescTools, vcd, rcompanion)
+
+
+# ------------------------------------------------------------------
+# FUNCIÓN AUXILIAR: test_independencia()
+# ------------------------------------------------------------------
+# Aplica automáticamente chi-cuadrado o Fisher según la condición
+# del 80%: al menos el 80% de las frecuencias esperadas deben ser > 5.
+# Si la condición NO se cumple → fisher.test() con simulación de p-valor
+# (simulate.p.value = TRUE) para tablas grandes (> 2×2).
+# Referencia: ADAT_medidas_de_asociacion.pdf, sección 2.1
+# ------------------------------------------------------------------
+test_independencia <- function(tabla, nombre = "") {
+  cat(sprintf("\n--- Test de independencia: %s ---\n", nombre))
+  
+  # 1. Frecuencias esperadas bajo H0 de independencia
+  esperadas <- suppressWarnings(chisq.test(tabla, correct = FALSE)$expected)
+  pct_ok    <- round(100 * mean(esperadas >= 5), 1)
+  
+  cat(sprintf("  Celdas con frec. esperada ≥ 5: %.1f%%  (umbral mínimo: 80%%)\n", pct_ok))
+  
+  # 2. Decisión: chi-cuadrado vs Fisher
+  if (pct_ok >= 80) {
+    cat("  ✓ Condición cumplida → se aplica Chi-cuadrado de Pearson.\n")
+    res <- chisq.test(tabla, correct = FALSE)
+    cat(sprintf("  X² = %.2f,  gl = %d,  p-valor = %.2e\n",
+                res$statistic, res$parameter, res$p.value))
+  } else {
+    cat("  ✗ Condición NO cumplida → se aplica Test Exacto de Fisher.\n")
+    simular <- nrow(tabla) > 2 | ncol(tabla) > 2
+    res <- fisher.test(tabla, simulate.p.value = simular, B = 10000)
+    cat(sprintf("  p-valor = %.2e%s\n", res$p.value,
+                ifelse(simular, "  (Monte Carlo, B = 10 000)", "")))
+  }
+  
+  # 3. Conclusión
+  cat("  Conclusión: ")
+  if (res$p.value < 0.05) {
+    cat("Rechazamos H0 → Hay asociación significativa entre las variables.\n")
+  } else {
+    cat("No se rechaza H0 → No hay evidencia de asociación significativa.\n")
+  }
+  
+  invisible(res)
+}
 
 
 # ==============================================================
@@ -1074,6 +1126,7 @@ cat("\nTabla con totales:\n");     print(addmargins(con_2x2))
 cat("\nFrecuencias relativas conjuntas:\n")
 print(round(prop.table(con_2x2), 4))
 cat("\nFrecuencias relativas por fila (condicionadas por CentralAir):\n")
+
 print(round(prop.table(con_2x2, margin = 1), 4))
 cat("\nFrecuencias relativas por columna (condicionadas por PriceCat):\n")
 print(round(prop.table(con_2x2, margin = 2), 4))
@@ -1095,28 +1148,12 @@ cat("\n", strrep("-", 55), "\n")
 cat("--- c.3) Test de independencia ---\n")
 cat(strrep("-", 55), "\n")
 
-chi_2x2 <- chisq.test(con_2x2)
-cat(sprintf("\nTest Chi-cuadrado de Pearson: X² = %.4f, gl = %d, p-valor = %.4e\n",
-            chi_2x2$statistic, chi_2x2$parameter, chi_2x2$p.value))
+chi_2x2 <- suppressWarnings(chisq.test(con_2x2))
 
 cat("\nFrecuencias esperadas bajo independencia:\n")
 print(round(chi_2x2$expected, 2))
 
-if (any(chi_2x2$expected < 5)) {
-  cat("\n   ⚠ Alguna frecuencia esperada < 5 → Se recomienda Test Exacto de Fisher.\n")
-  fisher_2x2 <- fisher.test(con_2x2)
-  cat(sprintf("   Test Exacto de Fisher: p-valor = %.4e, OR = %.4f\n",
-              fisher_2x2$p.value, fisher_2x2$estimate))
-} else {
-  cat("\n   ✓ Todas las frecuencias esperadas ≥ 5 → La aproximación chi-cuadrado es válida.\n")
-}
-
-cat("\n   Conclusión: ")
-if (chi_2x2$p.value < 0.05) {
-  cat("Rechazamos H0 → Existe asociación significativa entre CentralAir y PriceCat.\n")
-} else {
-  cat("No rechazamos H0 → No hay evidencia de asociación significativa.\n")
-}
+test_independencia(con_2x2, "CentralAir × PriceCat")
 
 
 # ==============================================================
@@ -1144,9 +1181,8 @@ mosaicplot(con_NxM,
            main = "Mosaico: Neighborhood (Top 8) × Categoría de Precio",
            color = c("#74ADD1", "#F46D43"), las = 2, cex.axis = 0.8)
 
-chi_NxM <- chisq.test(con_NxM)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.2f, gl = %d, p-valor = %.2e\n",
-            chi_NxM$statistic, chi_NxM$parameter, chi_NxM$p.value))
+chi_NxM <- suppressWarnings(chisq.test(con_NxM))
+test_independencia(con_NxM, "Neighborhood × PriceCat")
 
 
 # ==============================================================
@@ -1227,9 +1263,8 @@ mosaicplot(con_ord,
            main = "Mosaico: Calidad General × Antigüedad de la vivienda",
            color = c("#2C7BB6", "#74ADD1", "#F46D43", "#D73027"), las = 2, cex.axis = 0.75)
 
-chi_ord <- chisq.test(con_ord)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.2f, gl = %d, p-valor = %.2e\n",
-            chi_ord$statistic, chi_ord$parameter, chi_ord$p.value))
+chi_ord <- suppressWarnings(chisq.test(con_ord))
+test_independencia(con_ord, "QualCat × AgeCat")
 
 # Gamma de Goodman y Kruskal (PDF sección 4.1)
 gamma_result <- GoodmanKruskalGamma(con_ord, conf.level = 0.95)
@@ -1262,9 +1297,8 @@ train$Qual_cat3 <- cut(as.integer(train$OverallQual),
 tab_qual_kit <- table(droplevels(train$Qual_cat3), droplevels(train$KitchenQual))
 cat("Frecuencias absolutas:\n"); print(addmargins(tab_qual_kit))
 
-chi_qk <- chisq.test(tab_qual_kit, correct = FALSE)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.3f, gl = %d, p-valor = %.4e\n",
-            chi_qk$statistic, chi_qk$parameter, chi_qk$p.value))
+chi_qk <- suppressWarnings(chisq.test(tab_qual_kit, correct = FALSE))
+test_independencia(tab_qual_kit, "OverallQual × KitchenQual")
 
 # Medidas ordinales incluyendo D de Somers (aportación de Yago)
 gamma_qk  <- GoodmanKruskalGamma(tab_qual_kit, conf.level = 0.95)
@@ -1345,9 +1379,8 @@ cat(strrep("-", 55), "\n")
 con_mixta <- table(train$BldgType, train$QualCat)
 cat("\nTabla de contingencia:\n"); print(addmargins(con_mixta))
 
-chi_mixta <- chisq.test(con_mixta)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.2f, gl = %d, p-valor = %.2e\n",
-            chi_mixta$statistic, chi_mixta$parameter, chi_mixta$p.value))
+chi_mixta <- suppressWarnings(chisq.test(con_mixta))
+test_independencia(con_mixta, "BldgType × QualCat")
 cat(sprintf("\nC de Pearson = %.4f\n", ContCoef(con_mixta)))
 cat(sprintf("V de Cramer  = %.4f\n", CramerV(con_mixta)))
 print(assocstats(con_mixta))
@@ -1653,9 +1686,7 @@ tabla_cont_1 <- table(train_ca$Neighborhood, train_ca$QualGrupo)
 cat("\nTabla de contingencia: Neighborhood × Grupo de Calidad\n")
 print(tabla_cont_1)
 
-chi_test_1 <- chisq.test(tabla_cont_1)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.2f, df = %d, p-valor = %.2e\n",
-            chi_test_1$statistic, chi_test_1$parameter, chi_test_1$p.value))
+chi_test_1 <- test_independencia(tabla_cont_1, "Neighborhood × Grupo de Calidad")
 
 res_ca1 <- CA(tabla_cont_1, graph = FALSE)
 eig_ca1 <- get_eigenvalue(res_ca1)
@@ -1687,9 +1718,7 @@ cat("\n--- Segundo CA: BldgType × SaleCondition ---\n")
 tabla_cont_2 <- table(train$BldgType, train$SaleCondition)
 print(tabla_cont_2)
 
-chi_test_2 <- chisq.test(tabla_cont_2)
-cat(sprintf("\nTest Chi-cuadrado: X² = %.2f, df = %d, p-valor = %.2e\n",
-            chi_test_2$statistic, chi_test_2$parameter, chi_test_2$p.value))
+chi_test_2 <- test_independencia(tabla_cont_2, "BldgType × SaleCondition")
 
 res_ca2 <- CA(tabla_cont_2, graph = FALSE)
 p_ca2_biplot <- fviz_ca_biplot(res_ca2, repel = TRUE, map = "rowprincipal",
@@ -2028,10 +2057,8 @@ tabla_clust_qual <- table(train$Cluster_KM[!is.na(train$Cluster_KM)],
 cat("\nTabla cruzada: Clúster K-Means × Calidad General\n")
 print(tabla_clust_qual)
 
-chi_clust <- chisq.test(tabla_clust_qual)
-cat(sprintf("\nTest Chi²: X² = %.1f, p-valor = %.2e\n",
-            chi_clust$statistic, chi_clust$p.value))
-cat("Conclusión: Los clústeres están fuertemente asociados con la calidad general.\n")
+chi_clust <- test_independencia(tabla_clust_qual, "Clúster K-Means × Calidad General")
+cat("Conclusión adicional: Los clústeres están fuertemente asociados con la calidad general.\n")
 
 
 # ==============================================================
@@ -2049,4 +2076,3 @@ cat(sprintf("  K-Means      : K = 4 | BSS/TSS = %.1f%%\n", km_final$betweenss/km
 cat(sprintf("  Jerárquico   : Mejor método = %s (cofenético = %.3f)\n",
             mejor_metodo, max(metodos_coph)))
 cat(strrep("=", 65), "\n")
-
