@@ -21,7 +21,8 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 pacman::p_load(
   tidyverse, skimr, naniar, corrplot,
   plotly, scales, gridExtra, moments, viridis, nortest,
-  robustbase, VIM, editrules, MASS, car, dlookr, fastDummies
+  robustbase, VIM, editrules, MASS, car, dlookr, fastDummies,
+  fastcluster, mclust
 )
 
 
@@ -35,6 +36,7 @@ theme_hp <- theme_minimal(base_size = 11) +
     strip.text = element_text(face = "bold")
   )
 
+set.seed(42)
 
 # ==============================================================
 # a) PREPARACIÓN DE LOS DATOS
@@ -1300,7 +1302,7 @@ cat("Frecuencias absolutas:\n"); print(addmargins(tab_qual_kit))
 chi_qk <- suppressWarnings(chisq.test(tab_qual_kit, correct = FALSE))
 test_independencia(tab_qual_kit, "OverallQual × KitchenQual")
 
-# Medidas ordinales incluyendo D de Somers (aportación de Yago)
+# Medidas ordinales incluyendo D de Somers 
 gamma_qk  <- GoodmanKruskalGamma(tab_qual_kit, conf.level = 0.95)
 somers_c  <- SomersDelta(tab_qual_kit, direction = "column", conf.level = 0.95)
 somers_r  <- SomersDelta(tab_qual_kit, direction = "row",    conf.level = 0.95)
@@ -1624,7 +1626,7 @@ cor_cp_precio <- cor(scores_pca, precio_pca, use = "pairwise.complete.obs")
 cat("\nCorrelación de las componentes principales con SalePrice:\n")
 print(round(cor_cp_precio, 4))
 
-# Scatter PC1 vs SalePrice (aportación de Yago: muy visual)
+# Scatter PC1 vs SalePrice
 p_pc1_sp <- data.frame(PC1 = pca_out$x[, 1],
                        SalePrice = train$SalePrice[idx_pca],
                        OverallQual = qual_grupo) %>%
@@ -1838,7 +1840,7 @@ cat(sprintf("Observaciones: %d\n", nrow(train_clust_scaled)))
 
 cat("\n--- f.1) K-Means Clustering ---\n")
 
-# Método del codo y silueta (fviz_nbclust, estilo de Alejandro)
+# Método del codo y silueta 
 p_elbow <- fviz_nbclust(train_clust_scaled, kmeans, method = "wss",
                         k.max = 10, nstart = 50) +
   labs(title = "Método del codo — Suma de cuadrados intra-clúster (WSS)",
@@ -1851,7 +1853,7 @@ p_silhouette <- fviz_nbclust(train_clust_scaled, kmeans, method = "silhouette",
        subtitle = "Mayor anchura = mejor separación entre clústeres") + theme_hp
 print(p_silhouette)
 
-# Selección data-driven de K (aportación de Yago)
+# Selección data-driven de K 
 dist_clust <- dist(train_clust_scaled)
 sil_prom <- sapply(2:8, function(k) {
   km_tmp <- kmeans(train_clust_scaled, centers = k, nstart = 50)
@@ -1862,9 +1864,9 @@ cat(sprintf("\nK óptimo (silueta máxima): K = %d\n", k_opt))
 
 
 # ------------------------------------------------------------------
-# f.2) Comparación K=3, K=4, K=5 (estilo Alejandro)
+# f.2) Comparación K=3, K=4, K=5 
 # ------------------------------------------------------------------
-set.seed(101)
+
 km3 <- kmeans(train_clust_scaled, centers = 3, nstart = 50)
 km4 <- kmeans(train_clust_scaled, centers = 4, nstart = 50)
 km5 <- kmeans(train_clust_scaled, centers = 5, nstart = 50)
@@ -1915,13 +1917,12 @@ print(p_sil)
 cat("\n--- f.3) Clúster Jerárquico ---\n")
 
 # Usamos una muestra para dendrograma legible
-set.seed(42)
 n_sample <- 200
 idx_sample <- sample(nrow(train_clust_scaled), n_sample)
 clust_sample <- train_clust_scaled[idx_sample, ]
 dist_eucl <- dist(clust_sample, method = "euclidean")
 
-# Comparación de métodos de enlace (estilo Alejandro)
+# Comparación de métodos de enlace 
 hc_complete <- hclust(dist_eucl, method = "complete")
 hc_average  <- hclust(dist_eucl, method = "average")
 hc_single   <- hclust(dist_eucl, method = "single")
